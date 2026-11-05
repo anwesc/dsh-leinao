@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Persona: a seed growing into a fish">
+  <defs>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7fd3f7"/>
+      <stop offset="1" stop-color="#2d6fd2"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#water)"/>
+  <path d="M14 40c0-7 7-12 15-12 5 0 9 2 12 5l7-5-2 12 2 6-7-3c-3 3-7 5-12 5-8 0-15-5-15-13z" fill="#fff" opacity="0.95"/>
+  <circle cx="37" cy="37" r="2.2" fill="#20477f"/>
+  <path d="M22 45c3 3 7 4 10 4" stroke="#8fb8ea" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M28 22c0-5 4-8 8-8" stroke="#d9f2ff" stroke-width="2.5" fill="none" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="28" cy="20" r="2" fill="#d9f2ff" opacity="0.9"/>
+</svg>
