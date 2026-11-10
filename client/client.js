@@ -292,7 +292,13 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Card({ group, draft, changed, onToggle }) {
+    const rowMatches = (row, needle) => {
+      if (!needle) return true
+      const haystack = `${row.label ?? ''} ${row.key ?? ''} ${row.hint ?? ''}`.toLowerCase()
+      return haystack.includes(needle)
+    }
+
+    function Card({ group, draft, changed, onToggle, filter = '', openSignal = 0, registerRef, alwaysOpen = false }) {
       const [open, setOpen] = React.useState(() => {
         try {
           const saved = window.localStorage?.getItem(`dsh-leinao:card:${group.id}`)
@@ -303,6 +309,13 @@ window.__ModuleLoader__.load({
         }
         return Boolean(group.open)
       })
+      const needle = String(filter ?? '').trim().toLowerCase()
+      const rows = needle ? group.rows.filter((row) => rowMatches(row, needle)) : group.rows
+
+      React.useEffect(() => {
+        if (openSignal) setOpen(true)
+      }, [openSignal])
+
       const toggle = () => {
         const next = !open
         setOpen(next)
@@ -312,13 +325,28 @@ window.__ModuleLoader__.load({
           /* 忽略 */
         }
       }
+      if (needle && rows.length === 0) return null
+      const expanded = needle || alwaysOpen ? true : open
+
       return h(
         'section',
-        { style: S.card },
-        h(
+        { id: `dsh-leinao-group-${group.id}`, ref: registerRef, style: S.card },
+        alwaysOpen
+          ? h(
+              'div',
+              { style: S.cardHeader },
+              h(
+                'span',
+                { style: S.cardText },
+                h('span', { style: S.cardTitle }, group.title),
+                h('span', { style: S.cardHint }, group.hint),
+              ),
+              changed > 0 ? h('span', { style: S.cardCount }, `改 ${changed} 项`) : null,
+            )
+          : h(
           'button',
-          { type: 'button', style: S.cardHeader, onClick: toggle, 'aria-expanded': open },
-          h('span', { style: { ...S.caret, ...(open ? S.caretOpen : null) } }, '▶'),
+          { type: 'button', style: S.cardHeader, onClick: toggle, 'aria-expanded': expanded },
+          h('span', { style: { ...S.caret, ...(expanded ? S.caretOpen : null) } }, '▶'),
           h(
             'span',
             { style: S.cardText },
@@ -327,11 +355,11 @@ window.__ModuleLoader__.load({
           ),
           changed > 0 ? h('span', { style: S.cardCount }, `改 ${changed} 项`) : null,
         ),
-        open
+        expanded
           ? h(
               'div',
               { style: S.body },
-              group.rows.map((row, index) => h(Row, {
+              rows.map((row, index) => h(Row, {
                 key: row.key,
                 row,
                 value: draft[row.key],
@@ -354,7 +382,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       const [loading, setLoading] = React.useState(false)
       const [selected, setSelected] = React.useState(null)
-      const [open, setOpen] = React.useState(true)
+      const [open, setOpen] = React.useState(false)
       const [query, setQuery] = React.useState('')
       const canvasRef = React.useRef(null)
       const viewRef = React.useRef({ yaw: 0.45, pitch: 0.2, zoom: 1 })
@@ -763,27 +791,31 @@ window.__ModuleLoader__.load({
      * 分数只是提示，不拦任何操作——该记还是记，只是告诉你哪里在漏。
      */
     function HealthCard({ health }) {
+      const [open, setOpen] = React.useState(false)
       if (!health) return null
       const score = health.score ?? 0
       const tone = score >= 85 ? '#2f9e44' : score >= 70 ? '#f0a020' : '#e5484d'
       const buckets = HEALTH_BUCKETS.filter(([key]) => (health.freshness?.[key] ?? 0) > 0)
+      const bad = (health.checks ?? []).filter((check) => !check.ok).length
       return h(
         'div',
         { style: S.card },
         h(
-          'div',
-          { style: S.cardHeader },
+          'button',
+          { type: 'button', style: S.cardHeader, onClick: () => setOpen((value) => !value), 'aria-expanded': open },
+          h('span', { style: { ...S.caret, ...(open ? S.caretOpen : null) } }, '▶'),
           h(
             'span',
             { style: S.cardText },
             h('span', { style: S.cardTitle }, '记忆健康'),
-            h('span', { style: S.cardHint }, '索引预算、页间关系、新鲜度、整理比例与用户模型。'),
+            h('span', { style: S.cardHint }, bad ? `${bad} 项可以修` : '索引、关系、新鲜度都还行。'),
           ),
           h('span', { style: { ...S.cardCount, color: tone } }, `${score} 分 · ${health.grade ?? ''}`),
         ),
-        h(
-          'div',
-          { style: S.body },
+        open
+          ? h(
+              'div',
+              { style: S.body },
           h(
             'div',
             { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' } },
@@ -812,7 +844,8 @@ window.__ModuleLoader__.load({
               ? h('span', { style: S.rowHint }, `可以重读或整理：${health.stale.map((item) => item.title).join('、')}`)
               : null,
           ),
-        ),
+        )
+          : null,
       )
     }
 
@@ -825,6 +858,29 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = React.useState(false)
       const [saveError, setSaveError] = React.useState(null)
       const [savedAt, setSavedAt] = React.useState(null)
+      const [filter, setFilter] = React.useState('')
+      const [jump, setJump] = React.useState({ id: null, n: 0 })
+      const [active, setActive] = React.useState(GROUPS[0].id)
+      const [wide, setWide] = React.useState(() => {
+        try {
+          return window.innerWidth >= 760
+        } catch {
+          return true
+        }
+      })
+      const cardsRef = React.useRef({})
+
+      React.useEffect(() => {
+        const onResize = () => {
+          try {
+            setWide(window.innerWidth >= 760)
+          } catch {
+            /* 忽略 */
+          }
+        }
+        window.addEventListener?.('resize', onResize)
+        return () => window.removeEventListener?.('resize', onResize)
+      }, [])
 
       const load = React.useCallback(async () => {
         setLoading(true)
@@ -886,6 +942,21 @@ window.__ModuleLoader__.load({
         return list.filter((key) => String(draft[key]) !== String(base[key]))
       }, [draft, base, snapshot])
 
+      const needle = filter.trim().toLowerCase()
+      const visibleGroups = needle
+        ? GROUPS.filter((group) => group.rows.some((row) => rowMatches(row, needle)))
+        : GROUPS
+
+      const activeGroupId = visibleGroups.some((group) => group.id === active) ? active : visibleGroups[0]?.id
+
+      const jumpTo = (id) => {
+        setJump((prev) => ({ id, n: prev.n + 1 }))
+        // 等这一帧把卡片展开后再滚，位置才准。
+        window.setTimeout(() => {
+          cardsRef.current[id]?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+        }, 0)
+      }
+
       const status = snapshot?.status ?? {}
       const overridden = Array.isArray(snapshot?.overridden) ? snapshot.overridden : []
       const statusLine = savedAt
@@ -898,6 +969,29 @@ window.__ModuleLoader__.load({
         'div',
         { style: S.root },
         h('p', { style: S.intro }, '从名字开始，慢慢长成自己。这里改的是这台机器上的运行参数，保存后大多下一轮就生效。'),
+
+        h('input', {
+          type: 'search',
+          value: filter,
+          placeholder: '搜配置项：标签 / 键名 / 说明',
+          onChange: (event) => setFilter(event.target.value),
+          style: { ...S.input, width: '100%', textAlign: 'left', padding: '7px 10px', boxSizing: 'border-box' },
+        }),
+
+        wide ? null : h(
+          'div',
+          { style: { ...S.chips, gap: 6 } },
+          GROUPS.map((group) => h(
+            'button',
+            {
+              key: group.id,
+              type: 'button',
+              onClick: () => jumpTo(group.id),
+              style: { ...S.chip, cursor: 'pointer', background: 'transparent', color: 'inherit', font: 'inherit' },
+            },
+            group.title,
+          )),
+        ),
 
         loadError
           ? h('p', { style: S.error }, `读不到配置：${loadError}`)
@@ -920,18 +1014,94 @@ window.__ModuleLoader__.load({
                 status.deviceId ? h('p', { style: S.path }, `设备：${status.deviceId}`) : null,
               ),
 
+        !loading && !loadError
+          ? wide && !needle
+            ? h(
+                'div',
+                { style: { display: 'flex', gap: 12, alignItems: 'flex-start' } },
+                h(
+                  'nav',
+                  {
+                    style: {
+                      flex: '0 0 132px',
+                      position: 'sticky',
+                      top: 8,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 3,
+                    },
+                  },
+                  ...visibleGroups.map((group) => {
+                    const isActive = group.id === activeGroupId
+                    const groupChanged = group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length
+                    return h(
+                      'button',
+                      {
+                        key: group.id,
+                        type: 'button',
+                        onClick: () => setActive(group.id),
+                        style: {
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 6,
+                          padding: '6px 8px',
+                          borderRadius: 8,
+                          border: `1px solid ${isActive ? ACCENT : 'transparent'}`,
+                          background: isActive ? 'rgba(76,110,245,.10)' : 'transparent',
+                          color: 'inherit',
+                          font: 'inherit',
+                          fontSize: 12,
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                        },
+                      },
+                      h('span', null, group.title),
+                      groupChanged ? h('span', { style: { ...S.cardCount, fontSize: 10 } }, String(groupChanged)) : null,
+                    )
+                  }),
+                ),
+                h(
+                  'div',
+                  { style: { flex: '1 1 auto', minWidth: 0 } },
+                  visibleGroups
+                    .filter((group) => group.id === activeGroupId)
+                    .map((group) => h(Card, {
+                      key: group.id,
+                      group,
+                      draft,
+                      filter,
+                      alwaysOpen: true,
+                      registerRef: (node) => {
+                        if (node) cardsRef.current[group.id] = node
+                        else delete cardsRef.current[group.id]
+                      },
+                      changed: group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length,
+                      onToggle: change,
+                    })),
+                ),
+              )
+            : visibleGroups.map((group) => h(Card, {
+                key: group.id,
+                group,
+                draft,
+                filter,
+                openSignal: jump.id === group.id ? jump.n : 0,
+                registerRef: (node) => {
+                  if (node) cardsRef.current[group.id] = node
+                  else delete cardsRef.current[group.id]
+                },
+                changed: group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length,
+                onToggle: change,
+              }))
+          : null,
+
         !loading && !loadError ? h(GraphCard) : null,
 
         !loading && !loadError ? h(HealthCard, { health: snapshot?.status?.health }) : null,
 
-        !loading && !loadError
-          ? GROUPS.map((group) => h(Card, {
-              key: group.id,
-              group,
-              draft,
-              changed: group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length,
-              onToggle: change,
-            }))
+        !loading && !loadError && needle && visibleGroups.length === 0
+          ? h('p', { style: S.notice }, `没有匹配「${filter.trim()}」的配置项。`)
           : null,
 
         saveError ? h('p', { style: S.error }, `保存失败：${saveError}`) : null,
