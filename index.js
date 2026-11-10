@@ -28,9 +28,11 @@ import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
 import { detectMend } from './src/bond.js'
 import { foldCandidates, memoryIndex, memoryStats } from './src/memory.js'
+import { buildGraph } from './src/graph.js'
+import { buildHealth } from './src/health.js'
 import { ActivityTracker, ProactiveNudge } from './src/proactive.js'
 import { SessionGate } from './src/sessions.js'
-import { installSessionApi, installSettingsApi } from './src/settings.js'
+import { installGraphApi, installSessionApi, installSettingsApi } from './src/settings.js'
 import { SHIFT } from './src/traits.js'
 import { commitAll, createBackoff, ensureRepo, hasRemote, sync } from './src/git.js'
 
@@ -464,6 +466,7 @@ export function apply(ctx, inlineConfig = {}) {
         userMemories: memoryStats(current.state, 'user').visible,
         observations: observationStats(current.state).count,
         folded: stats.folded,
+        health: buildHealth(current.state, Date.now(), { memory: cfg.memory }),
         enabled: cfg.enabled,
       }
     },
@@ -475,6 +478,11 @@ export function apply(ctx, inlineConfig = {}) {
     gate: sessionGate,
     resolveAgent: findAgent,
     globalEnabled: () => cfg.proactive?.enabled !== false,
+    log,
+  })
+
+  installGraphApi(ctx, {
+    getGraph: () => buildGraph(refresh().state, Date.now(), { memory: cfg.memory }),
     log,
   })
 

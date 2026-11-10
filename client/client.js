@@ -342,6 +342,480 @@ window.__ModuleLoader__.load({
       )
     }
 
+    const GRAPH_API = '/dsh-leinao/graph'
+
+    /**
+     * 记忆图谱：一张零依赖的 3D 球（canvas，不引任何库）。
+     * 节点按 subject 排成两条带（自己 / 老大），连线就是页之间的 links；
+     * 拖动旋转、滚轮缩放、点节点看详情。数据每次点「刷新」现算，不吃缓存。
+     */
+    function GraphCard() {
+      const [graph, setGraph] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const [loading, setLoading] = React.useState(false)
+      const [selected, setSelected] = React.useState(null)
+      const [open, setOpen] = React.useState(true)
+      const [query, setQuery] = React.useState('')
+      const canvasRef = React.useRef(null)
+      const viewRef = React.useRef({ yaw: 0.45, pitch: 0.2, zoom: 1 })
+      const pointsRef = React.useRef([])
+      const dragRef = React.useRef(null)
+      const flyRef = React.useRef(0)
+
+      const load = React.useCallback(async () => {
+        setLoading(true)
+        setError('')
+        try {
+          const response = await fetch(GRAPH_API)
+          const body = await response.json()
+          if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+          setGraph(body)
+        } catch (err) {
+          setError(String(err?.message ?? err))
+        } finally {
+          setLoading(false)
+        }
+      }, [])
+
+      React.useEffect(() => {
+        void load()
+      }, [load])
+
+      // 标签聚类：每个节点归到它最「大众」的标签下，标签按人数占纬度带；
+      // 带内再按环排开（人太多就分几环），同一件事的页就挨在一起，孤立点落在自己的带上。
+      const positions = React.useMemo(() => {
+        const nodes = graph?.nodes ?? []
+        if (nodes.length === 0) return []
+        const tagCount = new Map()
+        for (const node of nodes) {
+          for (const tag of node.tags ?? []) tagCount.set(tag, (tagCount.get(tag) ?? 0) + 1)
+        }
+        const bandOf = (node) => {
+          let best = null
+          let bestCount = 0
+          for (const tag of node.tags ?? []) {
+            const count = tagCount.get(tag) ?? 0
+            if (count > bestCount || (count === bestCount && best !== null && tag < best)) {
+              best = tag
+              bestCount = count
+            }
+          }
+          return best ?? `subject:${node.subject ?? 'self'}`
+        }
+        const bands = new Map()
+        for (const node of nodes) {
+          const key = bandOf(node)
+          if (!bands.has(key)) bands.set(key, [])
+          bands.get(key).push(node)
+        }
+        const ordered = [...bands.entries()].sort((a, b) => {
+          if (b[1].length !== a[1].length) return b[1].length - a[1].length
+          return a[0].localeCompare(b[0])
+        })
+        const gap = 0.06
+        const usable = Math.max(0.2, 2 - gap * Math.max(0, ordered.length - 1))
+        const result = []
+        let cursor = 1
+        ordered.forEach(([key, members], bandIndex) => {
+          const height = (members.length / nodes.length) * usable
+          const center = cursor - height / 2
+          cursor -= height + gap
+          members.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+          const perRow = 12
+          const rows = Math.max(1, Math.ceil(members.length / perRow))
+          for (let row = 0; row < rows; row += 1) {
+            const slice = members.slice(row * perRow, (row + 1) * perRow)
+            const y = rows === 1 ? center : center + ((row + 0.5) / rows - 0.5) * height
+            const ring = Math.sqrt(Math.max(0.02, 1 - y * y))
+            slice.forEach((node, index) => {
+              const angle = (index / Math.max(1, slice.length)) * Math.PI * 2 + row * 0.7 + bandIndex * 0.9
+              result.push({ node, band: key, x: Math.cos(angle) * ring, y, z: Math.sin(angle) * ring })
+            })
+          }
+        })
+        return result
+      }, [graph])
+
+      const matches = React.useMemo(() => {
+        const needle = query.trim().toLowerCase()
+        if (!needle) return []
+        return (graph?.nodes ?? [])
+          .filter((node) =>
+            node.id.toLowerCase().includes(needle)
+            || String(node.title ?? '').toLowerCase().includes(needle)
+            || (node.tags ?? []).some((tag) => String(tag).toLowerCase().includes(needle)))
+          .slice(0, 8)
+      }, [graph, query])
+
+      const draw = React.useCallback(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const width = canvas.clientWidth || 520
+        const height = canvas.clientHeight || 340
+        const dpr = window.devicePixelRatio || 1
+        if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+          canvas.width = Math.round(width * dpr)
+          canvas.height = Math.round(height * dpr)
+        }
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.clearRect(0, 0, width, height)
+        const ink = getComputedStyle(canvas).color || '#888'
+        const view = viewRef.current
+        const radius = Math.min(width, height) * 0.4
+        const focal = 900
+        const camera = radius * 2.4
+        const cy = Math.cos(view.yaw)
+        const sy = Math.sin(view.yaw)
+        const cp = Math.cos(view.pitch)
+        const sp = Math.sin(view.pitch)
+        const project = (point) => {
+          const x1 = point.x * cy - point.z * sy
+          const z1 = point.x * sy + point.z * cy
+          const y2 = point.y * cp - z1 * sp
+          const z2 = point.y * sp + z1 * cp
+          const scale = (focal / Math.max(60, focal + z2 * radius + camera)) * view.zoom
+          return {
+            id: point.node.id,
+            x: width / 2 + x1 * radius * scale,
+            y: height / 2 + y2 * radius * scale,
+            z: z2,
+            scale,
+          }
+        }
+        const projected = positions.map(project)
+        const byId = new Map(projected.map((point) => [point.id, point]))
+        pointsRef.current = projected
+
+        for (const edge of graph?.edges ?? []) {
+          const from = byId.get(edge.source)
+          const to = byId.get(edge.target)
+          if (!from || !to) continue
+          const depth = Math.max(0, Math.min(1, (2 - (from.z + to.z)) / 4))
+          ctx.strokeStyle = `rgba(140,140,140,${(0.08 + depth * 0.32).toFixed(3)})`
+          ctx.lineWidth = 1
+          ctx.beginPath()
+          ctx.moveTo(from.x, from.y)
+          ctx.lineTo(to.x, to.y)
+          ctx.stroke()
+        }
+
+        const nodeById = new Map(positions.map((item) => [item.node.id, item.node]))
+        const matchIds = new Set(matches.map((node) => node.id))
+        const ordered = [...projected].sort((a, b) => a.z - b.z)
+        for (const point of ordered) {
+          const node = nodeById.get(point.id)
+          if (!node) continue
+          const depth = Math.max(0, Math.min(1, (1 - point.z) / 2))
+          const r = (3.4 + Math.min(6, Math.sqrt(node.degree ?? 0) * 2.4)) * point.scale
+          const matched = matchIds.has(node.id)
+          const dimmed = matchIds.size > 0 && !matched
+          ctx.globalAlpha = (0.3 + depth * 0.7) * (dimmed ? 0.22 : 1)
+          ctx.fillStyle = node.subject === 'user' ? '#e8590c' : '#4c6ef5'
+          ctx.beginPath()
+          ctx.arc(point.x, point.y, r, 0, Math.PI * 2)
+          ctx.fill()
+          if (matched && !dimmed) {
+            ctx.globalAlpha = 0.95
+            ctx.strokeStyle = '#f0a020'
+            ctx.lineWidth = 1.8
+            ctx.beginPath()
+            ctx.arc(point.x, point.y, r + 4, 0, Math.PI * 2)
+            ctx.stroke()
+          }
+          if (selected === node.id) {
+            ctx.globalAlpha = 1
+            ctx.strokeStyle = ink
+            ctx.lineWidth = 1.6
+            ctx.beginPath()
+            ctx.arc(point.x, point.y, r + 3.5, 0, Math.PI * 2)
+            ctx.stroke()
+          }
+          if (selected === node.id || matched || (node.degree ?? 0) >= 2) {
+            ctx.globalAlpha = 0.35 + depth * 0.5
+            ctx.fillStyle = ink
+            ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+            const label = node.title.length > 14 ? `${node.title.slice(0, 13)}…` : node.title
+            ctx.fillText(label, point.x + r + 4, point.y + 3.5)
+          }
+        }
+        // 带名：取每条带里最左边、且朝前的那个点，把标签挂在它左边。
+        const bandById = new Map(positions.map((item) => [item.node.id, item.band]))
+        const bandBest = new Map()
+        for (const point of projected) {
+          const band = bandById.get(point.id)
+          if (!band) continue
+          const best = bandBest.get(band)
+          if (!best || point.x < best.x) bandBest.set(band, point)
+        }
+        ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+        for (const [band, point] of bandBest) {
+          if (point.z > 0.15) continue
+          const label = band.startsWith('subject:')
+            ? (band === 'subject:user' ? '观察页' : '人格记忆')
+            : `#${band}`
+          const depth = Math.max(0, Math.min(1, (1 - point.z) / 2))
+          ctx.globalAlpha = 0.3 + depth * 0.45
+          ctx.fillStyle = ink
+          const left = point.x - 6
+          ctx.textAlign = left > 8 ? 'right' : 'left'
+          ctx.fillText(label, left > 8 ? left : 8, point.y + 3)
+        }
+        ctx.textAlign = 'start'
+        ctx.globalAlpha = 1
+
+        if (!graph || (graph.nodes ?? []).length === 0) {
+          ctx.fillStyle = ink
+          ctx.globalAlpha = 0.55
+          ctx.font = '12px system-ui, -apple-system, sans-serif'
+          ctx.textAlign = 'center'
+          ctx.fillText('还没有记忆页。先记两页，再回来看它们连起来。', width / 2, height / 2)
+          ctx.textAlign = 'start'
+          ctx.globalAlpha = 1
+        }
+      }, [graph, positions, selected, matches])
+
+      React.useEffect(() => {
+        if (open) draw()
+      }, [draw, open])
+
+      React.useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return undefined
+        const onWheel = (event) => {
+          event.preventDefault()
+          const view = viewRef.current
+          view.zoom = Math.min(2.6, Math.max(0.55, view.zoom * Math.exp(-event.deltaY * 0.0012)))
+          draw()
+        }
+        canvas.addEventListener('wheel', onWheel, { passive: false })
+        return () => canvas.removeEventListener('wheel', onWheel)
+      }, [draw])
+
+      const onPointerDown = (event) => {
+        const view = viewRef.current
+        dragRef.current = { x: event.clientX, y: event.clientY, yaw: view.yaw, pitch: view.pitch, moved: 0 }
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+      }
+
+      const onPointerMove = (event) => {
+        const drag = dragRef.current
+        if (!drag) return
+        const dx = event.clientX - drag.x
+        const dy = event.clientY - drag.y
+        const view = viewRef.current
+        view.yaw = drag.yaw + dx * 0.007
+        view.pitch = Math.max(-1.25, Math.min(1.25, drag.pitch + dy * 0.007))
+        drag.moved = Math.abs(dx) + Math.abs(dy)
+        draw()
+      }
+
+      const onPointerUp = (event) => {
+        const drag = dragRef.current
+        dragRef.current = null
+        if (!drag || drag.moved > 6) return
+        const rect = event.currentTarget.getBoundingClientRect()
+        const x = event.clientX - rect.left
+        const y = event.clientY - rect.top
+        const hit = [...pointsRef.current]
+          .sort((a, b) => b.z - a.z)
+          .find((point) => Math.hypot(point.x - x, point.y - y) <= 8 + 6 * point.scale)
+        setSelected(hit ? hit.id : null)
+      }
+
+      // 把某个节点转到正对镜头：yaw 先把它转到 z 轴，pitch 再抬到球心高度。
+      const flyTo = (id) => {
+        const item = positions.find((point) => point.node.id === id)
+        if (!item) return
+        const targetYaw = Math.atan2(item.x, item.z)
+        const ring = Math.hypot(item.x, item.z)
+        const targetPitch = Math.atan2(-item.y, -ring)
+        const view = viewRef.current
+        let delta = targetYaw - view.yaw
+        delta = Math.atan2(Math.sin(delta), Math.cos(delta))
+        const fromYaw = view.yaw
+        const fromPitch = view.pitch
+        const started = performance.now()
+        const token = (flyRef.current += 1)
+        const step = (now) => {
+          if (flyRef.current !== token) return
+          const t = Math.min(1, (now - started) / 480)
+          const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+          view.yaw = fromYaw + delta * ease
+          view.pitch = fromPitch + (targetPitch - fromPitch) * ease
+          draw()
+          if (t < 1) requestAnimationFrame(step)
+        }
+        requestAnimationFrame(step)
+        setSelected(id)
+      }
+
+      const node = selected ? (graph?.nodes ?? []).find((item) => item.id === selected) : null
+      const stats = graph?.stats ?? {}
+
+      return h(
+        'div',
+        { style: S.card },
+        h(
+          'button',
+          { type: 'button', style: S.cardHeader, onClick: () => setOpen((value) => !value) },
+          h(
+            'span',
+            { style: S.cardText },
+            h('span', { style: S.cardTitle }, '记忆图谱'),
+            h('span', { style: S.cardHint }, '同一标签的页聚成一条带；拖动旋转、滚轮缩放、搜到哪就飞到哪。'),
+          ),
+          h('span', { style: S.cardCount }, `${stats.shown ?? 0}/${stats.pages ?? 0} 页 · ${stats.links ?? 0} 条关系`),
+          h('span', { style: { ...S.caret, ...(open ? S.caretOpen : null) } }, '▶'),
+        ),
+        open
+          ? h(
+              'div',
+              { style: S.body },
+              h(
+                'div',
+                { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px' } },
+                h('input', {
+                  type: 'search',
+                  value: query,
+                  placeholder: '搜标题 / 路径 / 标签，回车飞过去',
+                  onChange: (event) => setQuery(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter' && matches.length) flyTo(matches[0].id)
+                  },
+                  style: { ...S.input, flex: '1 1 auto', width: 'auto', textAlign: 'left', padding: '6px 10px' },
+                }),
+                h(
+                  'button',
+                  { type: 'button', style: S.buttonGhost, onClick: () => void load(), disabled: loading },
+                  loading ? '刷新中…' : '刷新',
+                ),
+              ),
+              matches.length
+                ? h(
+                    'div',
+                    { style: { display: 'flex', gap: 6, flexWrap: 'wrap', padding: '0 14px 8px' } },
+                    matches.map((match) => h(
+                      'button',
+                      {
+                        key: match.id,
+                        type: 'button',
+                        onClick: () => flyTo(match.id),
+                        style: { ...S.chip, cursor: 'pointer', borderColor: 'rgba(240,160,32,.55)' },
+                      },
+                      match.title,
+                    )),
+                  )
+                : null,
+              h('canvas', {
+                ref: canvasRef,
+                style: {
+                  display: 'block',
+                  width: '100%',
+                  height: 340,
+                  cursor: 'grab',
+                  touchAction: 'none',
+                  background: 'var(--dsw-alias-bg-layer-1, rgba(127,127,127,.05))',
+                },
+                onPointerDown,
+                onPointerMove,
+                onPointerUp,
+                onPointerCancel: () => {
+                  dragRef.current = null
+                },
+              }),
+              node
+                ? h(
+                    'div',
+                    {
+                      style: {
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 3,
+                        padding: '10px 14px',
+                        borderTop: `1px solid ${BORDER}`,
+                      },
+                    },
+                    h('span', { style: S.label }, node.title),
+                    h('span', { style: S.path }, `${node.id} · 强度 ${node.strength.toFixed(2)} · ${node.degree} 条关系`),
+                    node.gist ? h('span', { style: S.rowHint }, node.gist) : null,
+                    node.tags.length ? h('span', { style: S.path }, node.tags.map((tag) => `#${tag}`).join(' ')) : null,
+                  )
+                : null,
+              error ? h('p', { style: { ...S.error, padding: '0 14px 10px' } }, `图谱读不出来：${error}`) : null,
+            )
+          : null,
+      )
+    }
+
+    const HEALTH_BUCKETS = [
+      ['today', '今天'],
+      ['week', '7 天'],
+      ['month', '30 天'],
+      ['quarter', '90 天'],
+      ['older', '更早'],
+      ['never', '没日期'],
+    ]
+
+    /**
+     * 记忆健康：体检结果直接吃配置接口里的 `status.health`，不额外发请求。
+     * 分数只是提示，不拦任何操作——该记还是记，只是告诉你哪里在漏。
+     */
+    function HealthCard({ health }) {
+      if (!health) return null
+      const score = health.score ?? 0
+      const tone = score >= 85 ? '#2f9e44' : score >= 70 ? '#f0a020' : '#e5484d'
+      const buckets = HEALTH_BUCKETS.filter(([key]) => (health.freshness?.[key] ?? 0) > 0)
+      return h(
+        'div',
+        { style: S.card },
+        h(
+          'div',
+          { style: S.cardHeader },
+          h(
+            'span',
+            { style: S.cardText },
+            h('span', { style: S.cardTitle }, '记忆健康'),
+            h('span', { style: S.cardHint }, '索引预算、页间关系、新鲜度、整理比例与用户模型。'),
+          ),
+          h('span', { style: { ...S.cardCount, color: tone } }, `${score} 分 · ${health.grade ?? ''}`),
+        ),
+        h(
+          'div',
+          { style: S.body },
+          h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' } },
+            h(
+              'div',
+              { style: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,.18)', overflow: 'hidden' } },
+              h('div', { style: { width: `${score}%`, height: '100%', background: tone, borderRadius: 999 } }),
+            ),
+            h(
+              'div',
+              { style: S.chips },
+              ...buckets.map(([key, label]) => h('span', { key, style: S.chip }, `${label} ${health.freshness[key]}`)),
+              h(
+                'span',
+                { style: S.chip },
+                `${health.size?.pages ?? 0} 页 · ${health.size?.observations ?? 0} 条观察 · ${health.size?.chars ?? 0} 字`,
+              ),
+            ),
+            ...(health.checks ?? []).map((check) => h(
+              'div',
+              { key: check.id, style: { display: 'flex', gap: 8, alignItems: 'baseline' } },
+              h('span', { style: { fontSize: 11, width: 12, color: check.ok ? '#2f9e44' : '#e5484d' } }, check.ok ? '✓' : '!'),
+              h('span', { style: S.rowHint }, `${check.label}：${check.detail}`),
+            )),
+            health.stale?.length
+              ? h('span', { style: S.rowHint }, `可以重读或整理：${health.stale.map((item) => item.title).join('、')}`)
+              : null,
+          ),
+        ),
+      )
+    }
+
     function Section() {
       const [loading, setLoading] = React.useState(true)
       const [loadError, setLoadError] = React.useState(null)
@@ -445,6 +919,10 @@ window.__ModuleLoader__.load({
                 h('p', { style: S.path }, `配置文件：${snapshot?.file ?? '—'}`),
                 status.deviceId ? h('p', { style: S.path }, `设备：${status.deviceId}`) : null,
               ),
+
+        !loading && !loadError ? h(GraphCard) : null,
+
+        !loading && !loadError ? h(HealthCard, { health: snapshot?.status?.health }) : null,
 
         !loading && !loadError
           ? GROUPS.map((group) => h(Card, {

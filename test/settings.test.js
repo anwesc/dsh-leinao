@@ -14,6 +14,7 @@ import {
   configSnapshot,
   flattenPatch,
   installSessionApi,
+  installGraphApi,
   installSettingsApi,
   mergeIntoFile,
   pickEditable,
@@ -298,4 +299,36 @@ test('settings: 没有会话时接口回 no-session 而不是报错', async () =
   assert.equal(response.status, 200)
   assert.equal(response.json().ok, false)
   assert.equal(response.json().reason, 'no-session')
+})
+
+test('settings: 图谱接口只读、同源、现算现返回', async () => {
+  let route = null
+  let calls = 0
+  const ctx = {
+    inject(services, callback) {
+      assert.deepEqual(services, ['webServer'])
+      callback({ webServer: { register(value) { route = value; return () => { route = null } } }, effect(fn) { fn() } })
+    },
+  }
+  assert.equal(installGraphApi(ctx, {
+    getGraph: () => {
+      calls += 1
+      return { nodes: [], edges: [], stats: { pages: 0, shown: 0, links: 0, isolated: 0 } }
+    },
+  }), true)
+  assert.equal(route?.path, '/dsh-leinao/graph')
+
+  const read = fakeResponse()
+  await route.handler(fakeRequest({ headers: { host: '127.0.0.1:1' } }), read)
+  assert.equal(read.status, 200)
+  assert.deepEqual(read.json(), { nodes: [], edges: [], stats: { pages: 0, shown: 0, links: 0, isolated: 0 } })
+  assert.equal(calls, 1)
+
+  const write = fakeResponse()
+  await route.handler(fakeRequest({ method: 'POST', body: {} }), write)
+  assert.equal(write.status, 405)
+
+  const cross = fakeResponse()
+  await route.handler(fakeRequest({ headers: { origin: 'https://evil.example', host: '127.0.0.1:1' } }), cross)
+  assert.equal(cross.status, 403)
 })

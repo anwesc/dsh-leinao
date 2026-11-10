@@ -54,6 +54,7 @@ export const EDITABLE = {
 
 const CONFIG_PATH = '/dsh-leinao/config'
 const SESSION_PATH = '/dsh-leinao/session'
+const GRAPH_PATH = '/dsh-leinao/graph'
 const BODY_LIMIT_BYTES = 64 * 1024
 const isPlain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -284,7 +285,7 @@ export function installSettingsApi(ctx, { file, getConfig, getDefaults, reload, 
   return true
 }
 
-export { CONFIG_PATH as SETTINGS_PATH, SESSION_PATH }
+export { CONFIG_PATH as SETTINGS_PATH, SESSION_PATH, GRAPH_PATH }
 
 /**
  * 注册会话内开关接口：`GET /dsh-leinao/session?sessionId=…` 读状态，
@@ -350,6 +351,46 @@ export function installSessionApi(ctx, { gate, resolveAgent, globalEnabled = () 
       }
     }
     if (typeof host.effect === 'function') host.effect(mount, 'leinao: session api')
+    else mount()
+  })
+  return true
+}
+
+/**
+ * 注册记忆图谱接口：`GET /dsh-leinao/graph` 每次现算，前端点「刷新」就重读。
+ * 数据量小（最多 150 个节点），不值得缓存，也就不会画出过期的图。
+ */
+export function installGraphApi(ctx, { getGraph, log } = {}) {
+  if (typeof ctx?.inject !== 'function' || typeof getGraph !== 'function') return false
+  const handle = async (request, response) => {
+    if (!isSameOrigin(request)) return sendJson(response, 403, { error: '来源不被信任（只允许本机）' })
+    if (String(request?.method ?? 'GET').toUpperCase() !== 'GET') {
+      return sendJson(response, 405, { error: '不支持的方法' })
+    }
+    try {
+      return sendJson(response, 200, getGraph())
+    } catch (error) {
+      log?.warn?.(`[leinao] 图谱请求失败：${error.message}`)
+      return sendJson(response, 400, { error: String(error?.message ?? error) })
+    }
+  }
+  ctx.inject(['webServer'], (host) => {
+    const server = host?.webServer
+    if (!server || typeof server.register !== 'function') {
+      log?.warn?.('[leinao] webServer 不可用，记忆图谱没挂上')
+      return
+    }
+    const mount = () => {
+      const dispose = server.register({ kind: 'exact', path: GRAPH_PATH, handler: handle })
+      return () => {
+        try {
+          dispose?.()
+        } catch {
+          /* 宿主卸载时路由可能已经没了 */
+        }
+      }
+    }
+    if (typeof host.effect === 'function') host.effect(mount, 'leinao: graph api')
     else mount()
   })
   return true
