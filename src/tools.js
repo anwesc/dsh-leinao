@@ -6,11 +6,12 @@
  * - 能给用户看的，一律返回人话 + 路径；不返回 JSON 大对象。
  * - reset 要 confirm=true，避免模型顺手把人格清了。
  */
-import { AXES, AXIS_LABELS, SHIFT, checkShift, isAxis } from './traits.js'
+import { AXES, AXIS_LABELS, SHIFT, checkShift, clamp01, isAxis } from './traits.js'
 import { bondLabel, checkBond, riftLevelLabel } from './bond.js'
 import { baseline, decay, moodLabel } from './mood.js'
 import { describeTraits } from './prompt.js'
 import { isVisible, memoryStats, normalizeLinks, normalizeTags, searchPages } from './memory.js'
+import { OBSERVATION, normalizeObservationKey, observationStats } from './observations.js'
 
 const SHIFT_MAX = SHIFT.maxDelta
 
@@ -88,13 +89,16 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const pinned = AXES.filter((axis) => state.traits[axis].pinned).map((axis) => AXIS_LABELS[axis])
       const bond = state.bond ?? { level: 0, rift: null }
       const memory = memoryStats(state)
+      const selfMemory = memoryStats(state, 'self')
+      const userMemory = memoryStats(state, 'user')
+      const observed = observationStats(state)
       const lines = [
         `名字：${state.profile.name}${state.profile.userCall ? `；称呼对方「${state.profile.userCall}」` : ''}`,
         `性格：${describeTraits(state.traits)}`,
         `关系：${bondLabel(bond.level)}${bond.rift ? `（有未解的疙瘩：${bond.rift.gist ?? bond.rift.why ?? '没说清'}，程度${riftLevelLabel(bond.rift.heat)}）` : ''}`,
         `心情：${moodLine(state, Date.now(), rt.getConfig?.()?.mood?.halfLifeHours)}`,
         `相处：${state.stats.userTurns} 轮 · 亲密度 ${fmt(state.intimacy)} · ${state.stats.events} 条事件`,
-        `记忆：${memory.visible} 条在册${memory.folded ? `（${memory.folded} 条整理页）` : ''}${memory.isolated ? `，${memory.isolated} 条还没有互链` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
+        `记忆：${selfMemory.visible} 条在册${selfMemory.folded ? `（${selfMemory.folded} 条整理页）` : ''}${selfMemory.isolated ? `，${selfMemory.isolated} 条还没有互链` : ''}${userMemory.visible || observed.count ? ` · 关于老大 ${userMemory.visible} 条页 / ${observed.count} 条观察` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
         state.shifts?.length ? `突变：${state.shifts.length} 次` : null,
         pinned.length ? `固定：${pinned.join('、')}` : null,
       ].filter(Boolean)
@@ -203,8 +207,9 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_remember',
-    description: '把一件值得长期记住的事写进记忆（关于老大、约定、重要经历、你自己的判断）。同一 path 再写就是更新。用 links 把它和相关旧记忆连起来（比如「换工作」连到「老大」），以后一条被想起，另一条更容易跟着出现。日常寒暄不用记。',
+    description: '把一件值得长期记住的事写进记忆。subject=self 是「我自己的记忆」（关于老大、约定、重要经历、我自己的判断）；subject=user 是「对老大的观察」（他的习惯、偏好、最近状态，不是他的自我描述）。同一 path 再写就是更新。用 links 把它和相关旧记忆连起来，以后一条被想起，另一条更容易跟着出现。日常寒暄不用记。',
     parameters: {
+      subject: { type: 'string', description: 'self（默认，我自己的记忆）/ user（对老大的观察）' },
       title: { type: 'string', required: true, description: '一句话标题，≤40 字' },
       content: { type: 'string', required: true, description: '正文；以后每轮只看得到索引里的一行，细节要靠这里' },
       path: { type: 'string', description: '稳定 id：小写字母/数字/斜杠，如 people/laoda、events/job-change；不填自动生成 notes/xxx' },
@@ -216,6 +221,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
     output: TEXT_OUTPUT,
     execute(args) {
       const { state } = rt.refresh()
+      const subject = args?.subject === 'user' ? 'user' : 'self'
       const title = cleanText(args?.title, 40)
       const content = cleanText(args?.content, 2000)
       if (!title) return Promise.resolve('没有记：title 不能为空。')
@@ -235,6 +241,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const draft = {
         kind: 'page',
         path,
+        subject,
         title,
         content,
         gist: cleanText(args?.gist, 40) || firstLine(content),
@@ -247,15 +254,45 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const related = links.length ? `，关联 ${links.length} 条` : ''
       const miss = dropped > 0 ? `其中 ${dropped} 个 path 没有对应的记忆，已忽略。` : ''
       return Promise.resolve(
-        `${existed ? '更新了' : '记下了'}「${title}」（${path}${salience === 1 ? '，永远记得' : ''}${related}）。${miss}`,
+        `${existed ? '更新了' : '记下了'}「${title}」（${path}${subject === 'user' ? '，关于老大' : ''}${salience === 1 ? '，永远记得' : ''}${related}）。${miss}`,
       )
     },
   }))
 
   tools.push(defineTool({
-    name: 'persona_recall',
-    description: '按关键词或 path 查记忆全文。命中会记一次召回，让这条以后更容易被想起来。',
+    name: 'persona_observe',
+    description: `记一条「对老大的观察」进用户模型：他反复出现的习惯、偏好、作息、情绪模式。这不是人格记忆，不进我自己的叙事，也不该写成"他就是这样的人"。必须带 evidence——用户原话里逐字抄的一小段；最近对话里找不到原话就不要记，宁可这次空着。同一个 key 再记会覆盖旧值（key 要稳定，如「作息」「口味」「沟通习惯」）。`,
     parameters: {
+      key: { type: 'string', required: true, description: `稳定的短标签，≤${OBSERVATION.maxKeyChars} 字，如 作息、口味、沟通习惯` },
+      value: { type: 'string', required: true, description: `一句话观察，≤${OBSERVATION.maxValueChars} 字` },
+      evidence: { type: 'string', required: true, description: `用户原话里的一段，逐字抄（≥${OBSERVATION.minEvidenceChars} 字）` },
+      confidence: { type: 'number', description: '置信度 0–1，默认 0.6；只见过一次别超过 0.5' },
+    },
+    output: TEXT_OUTPUT,
+    execute(args) {
+      const key = normalizeObservationKey(args?.key)
+      const value = cleanText(args?.value, OBSERVATION.maxValueChars)
+      const evidence = String(args?.evidence ?? '').trim()
+      if (!key) return Promise.resolve(`没有记：key 是 1–${OBSERVATION.maxKeyChars} 字的短标签，如「作息」。`)
+      if (!value) return Promise.resolve('没有记：value 不能为空。')
+      if (evidence.length < OBSERVATION.minEvidenceChars) {
+        return Promise.resolve(`没有记：evidence 要抄一段用户原话（至少 ${OBSERVATION.minEvidenceChars} 字），没证据的观察会变成瞎猜。`)
+      }
+      if (rt.verifyEvidence && !rt.verifyEvidence(evidence)) {
+        return Promise.resolve('没有记：这段证据在最近的对话里找不到原话。别凭印象写观察——要么抄原话，要么这次不记。')
+      }
+      const level = Number(args?.confidence)
+      const confidence = Number.isFinite(level) ? clamp01(level) : 0.6
+      rt.record({ kind: 'observation', key, value, evidence, confidence })
+      return Promise.resolve(`记下了观察「${key}：${value}」（置信度 ${fmt(confidence)}）。`)
+    },
+  }))
+
+  tools.push(defineTool({
+    name: 'persona_recall',
+    description: '按关键词或 path 查记忆全文。命中会记一次召回，让这条以后更容易被想起来。subject 不填两边都查。',
+    parameters: {
+      subject: { type: 'string', description: '限定一边：self（我的记忆）/ user（关于老大）' },
       query: { type: 'string', description: '关键词，空格分隔，全部命中才算；和 path 二选一' },
       path: { type: 'string', description: '直接取某一条，优先于 query' },
       limit: { type: 'number', description: '最多几条，默认 3、上限 5' },
@@ -264,6 +301,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
     execute(args) {
       const { state } = rt.refresh()
       const path = String(args?.path ?? '').trim()
+      const subject = args?.subject === 'self' || args?.subject === 'user' ? args.subject : undefined
       const limit = Math.min(5, Math.max(1, Number(args?.limit) || 3))
       if (path) {
         const page = state.pages[path]
@@ -273,7 +311,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       }
       const query = String(args?.query ?? '').trim()
       if (!query) return Promise.resolve('给个 query（关键词）或 path。')
-      const pages = searchPages(state, query, limit)
+      const pages = searchPages(state, query, limit, { subject })
       if (!pages.length) return Promise.resolve(`没找到和「${query}」有关的记忆。`)
       for (const page of pages) rt.record({ kind: 'recall', path: page.path, via: 'tool' })
       return Promise.resolve(pages.map((page) => formatPage(page, state)).join('\n\n'))
@@ -361,14 +399,15 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_export',
-    description: '导出当前人格为 markdown（给人看/备份），返回文件路径。',
+    description: '导出当前人格为 markdown（给人看/备份），用户模型另存一份 USER.md，可单独拿走。返回文件路径。',
     parameters: {},
     output: TEXT_OUTPUT,
     execute() {
       const { state } = rt.refresh()
       const text = rt.render(state)
       const path = rt.writeExport(text)
-      return Promise.resolve(`已导出到 ${path}。\n\n${text}`)
+      const userPath = rt.writeUserModel?.(state)
+      return Promise.resolve(`已导出到 ${path}。${userPath ? `用户模型另存 ${userPath}。` : ''}\n\n${text}`)
     },
   }))
 

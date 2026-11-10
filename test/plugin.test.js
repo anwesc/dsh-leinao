@@ -17,12 +17,14 @@ function fakeCtx() {
   const ctx = {
     logger: { info() {}, warn() {}, debug() {} },
     prompt: null,
+    prompts: {},
     handlers: new Map(),
     registered: [],
     disposers: [],
     systemPrompt: {
       context(entry) {
-        ctx.prompt = entry
+        ctx.prompts[entry.name] = entry
+        if (entry.name === 'persona') ctx.prompt = entry
         return () => {}
       },
     },
@@ -71,6 +73,7 @@ test('plugin: 注册了 prompt 上下文和 session/event 监听', async (t) => 
     'persona_digest',
     'persona_export',
     'persona_forget',
+    'persona_observe',
     'persona_pin',
     'persona_recall',
     'persona_remember',
@@ -224,6 +227,33 @@ test('plugin: 记忆进注入、命中记弱召回、到点提整理', async (t)
   const text = ctx.prompt.text()
   assert.match(text, /老大爱打游戏/)
   assert.match(text, /记忆整理/)
+})
+
+test('plugin: 用户模型单独一块注入，和人格记忆分开', async (t) => {
+  const { ctx } = setup(t)
+  const seed = ctx.registered.find((tool) => tool.name === 'persona_seed')
+  await seed.execute({ name: '阿鱼', user_call: '老大' })
+  const remember = ctx.registered.find((tool) => tool.name === 'persona_remember')
+  await remember.execute({ subject: 'user', title: '老大爱打游戏', content: '下班常打游戏', path: 'people/laoda' })
+
+  // 观察必须有原话证据；没说过的话不能拿来当证据
+  const fire = ctx.handlers.get('session/event')
+  fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '老大今天又两点睡，还在写代码' }] } })
+  await wait(30)
+  const observe = ctx.registered.find((tool) => tool.name === 'persona_observe')
+  assert.match(await observe.execute({ key: '作息', value: '常熬夜', evidence: '他经常通宵' }), /找不到原话/)
+  assert.match(await observe.execute({ key: '作息', value: '常熬夜写代码', evidence: '又两点睡' }), /记下了观察/)
+  await wait(30)
+
+  const block = ctx.prompts['about-user']
+  assert.ok(block, '应当注册 about-user 注入块')
+  assert.equal(block.order, 131)
+  assert.match(block.text(), /关于老大/)
+  assert.match(block.text(), /作息：常熬夜写代码/)
+  assert.match(block.text(), /下班常打游戏/)
+  assert.ok(!/【记忆】/.test(block.text()), '用户模型块不该带人格记忆的头')
+  assert.ok(!/下班常打游戏/.test(ctx.prompt.text()), '人格块不该带用户模型的内容')
+  assert.ok(!/常熬夜写代码/.test(ctx.prompt.text()), '人格块不该带观察')
 })
 
 test('plugin: seed 只有一次，reset 要 confirm', async (t) => {

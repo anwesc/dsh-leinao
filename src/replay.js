@@ -10,6 +10,7 @@ import { applySignal, baseline, MOOD_DEFAULTS } from './mood.js'
 import { clamp01, defaultTraits, growthResistance, crossedSteps, isAxis } from './traits.js'
 import { BOND, BOND_ACTIONS, MEND, MEND_LABELS, bondOffset, clampHeat, defaultBond } from './bond.js'
 import { isVisible, normalizeLinks, normalizeTags } from './memory.js'
+import { OBSERVATION, normalizeObservationKey } from './observations.js'
 
 export const STATE_VERSION = 2
 
@@ -24,6 +25,7 @@ export function emptyState() {
     bond: defaultBond(null),
     shifts: [],
     pages: {},
+    observations: {},
     milestones: [],
     stats: {
       events: 0,
@@ -79,6 +81,23 @@ export function applyEvent(state, event) {
       state.phase = 'active'
       state.stats.seededAt = event.at
       if (!state.bond?.since) state.bond = defaultBond(event.at)
+      break
+    }
+    case 'observation': {
+      const key = normalizeObservationKey(event.key)
+      const value = typeof event.value === 'string' ? event.value.trim() : ''
+      if (!key || !value || value.length > OBSERVATION.maxValueChars) return false
+      if (!state.observations) state.observations = {}
+      const prev = state.observations[key]
+      state.observations[key] = {
+        key,
+        value,
+        confidence: Number.isFinite(event.confidence) ? clamp01(event.confidence) : 0.6,
+        evidence: typeof event.evidence === 'string' ? event.evidence.trim().slice(0, 200) : null,
+        at: prev?.at ?? event.at,
+        updatedAt: event.at,
+        count: (prev?.count ?? 0) + 1,
+      }
       break
     }
     case 'affect': {
@@ -189,6 +208,7 @@ export function applyEvent(state, event) {
         supersededBy: prev.supersededBy ?? null,
         sources: prev.sources ?? [],
         kind: prev.kind ?? 'page',
+        subject: event.subject === undefined ? (prev.subject ?? 'self') : event.subject === 'user' ? 'user' : 'self',
         links: event.links === undefined ? (prev.links ?? []) : normalizeLinks(event.links),
         forgottenAt: null,
         forgottenWhy: null,
@@ -222,6 +242,8 @@ export function applyEvent(state, event) {
       const links = normalizeLinks([...(prev.links ?? []), ...inherited]).filter(
         (link) => link !== into && isVisible(state.pages[link]),
       )
+      const subjects = new Set(sources.map((path) => (state.pages[path]?.subject === 'user' ? 'user' : 'self')))
+      const subject = subjects.size === 1 ? (subjects.has('user') ? 'user' : 'self') : (prev.subject ?? 'self')
       state.pages[into] = {
         ...prev,
         path: into,
@@ -244,6 +266,7 @@ export function applyEvent(state, event) {
         forgottenAt: null,
         forgottenWhy: null,
         kind: 'fold',
+        subject,
         sources: merged,
         links,
       }

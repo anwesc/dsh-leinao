@@ -65,6 +65,17 @@ export function buildInjection(state, nowMs = Date.now(), options = {}) {
   return lines.join('\n')
 }
 
+/**
+ * 用户模型块：关于老大的观察，单独一段、单独预算。
+ * 只喂「通常怎样」，不进人格叙事；并要求模型别拿它编共鸣。
+ */
+export function buildUserInjection(state, options = {}) {
+  if (!state || state.phase === 'seed') return ''
+  const memory = String(options.memory ?? '').trim()
+  if (!memory) return ''
+  return `${memory}\n注意：这是观察，只用来判断情境（深夜就短一点、赶工时别铺垫），不要拿它编"我懂你"，也别当成他的自我描述复述。`
+}
+
 export function injectionMeta(state, nowMs = Date.now()) {
   const mood = decay(state.mood, baseline(state.traits), nowMs)
   return {

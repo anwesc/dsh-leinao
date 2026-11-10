@@ -83,6 +83,14 @@ export function isVisible(page) {
 }
 
 /**
+ * 这条记忆记的是谁：'self'=我自己（人格记忆），'user'=对老大的观察（用户模型）。
+ * 旧事件没有这个字段，一律按 self 处理。
+ */
+export function subjectOf(page) {
+  return page?.subject === 'user' ? 'user' : 'self'
+}
+
+/**
  * 强度：分级权重 × 时间衰减 + 召回加成，封顶 1。
  * salience 1 或 pinned 恒为 1——"重要的永远在"。
  */
@@ -122,14 +130,17 @@ function lineFor(page, cfg) {
 /**
  * 挑这一轮要注入的记忆目录。
  * 命中页的邻居也算「沾边」：分数减半补进来，但强度低于 hideBelow 的仍然不复活。
+ * options.subject = 'self' | 'user' 时只挑这一边（人格记忆与用户模型分开注入）。
  * @returns {{text:string, selected:Array<{path:string, via:'fixed'|'strong'|'hit', linked?:boolean}>, lines:string[]}}
  */
 export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
   const cfg = { ...MEMORY, ...options }
+  const subject = cfg.subject
   const fixed = []
   const rest = []
   for (const page of Object.values(state?.pages ?? {})) {
     if (!isVisible(page)) continue
+    if (subject && subjectOf(page) !== subject) continue
     const strength = strengthOf(page, nowMs, cfg)
     if (page.pinned || page.salience === 1) fixed.push({ page, strength, hit: 0 })
     else rest.push({ page, strength, hit: matchScore(page, cue), linked: false })
@@ -156,7 +167,7 @@ export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
   const chosen = [...fixed, ...strong, ...hits].slice(0, cfg.indexMaxLines)
   if (!chosen.length) return { text: '', selected: [], lines: [] }
 
-  const header = '【记忆】你记得这些事（要细节就调 persona_recall）：'
+  const header = cfg.header ?? '【记忆】你记得这些事（要细节就调 persona_recall）：'
   const budget = cfg.indexMaxChars - header.length - 1
   const lines = []
   const selected = []
@@ -214,6 +225,7 @@ export function searchPages(state, query, limit = 3, options = {}) {
   const hits = []
   for (const page of Object.values(state?.pages ?? {})) {
     if (!isVisible(page)) continue
+    if (options.subject && subjectOf(page) !== options.subject) continue
     const hay = [page.path, page.title, page.gist, (page.tags ?? []).join(' '), page.content].join(' ').toLowerCase()
     let score = 0
     let all = true
@@ -251,8 +263,9 @@ export function searchPages(state, query, limit = 3, options = {}) {
     .map((hit) => hit.page)
 }
 
-export function memoryStats(state) {
-  const pages = Object.values(state?.pages ?? {})
+export function memoryStats(state, subject) {
+  const all = Object.values(state?.pages ?? {})
+  const pages = subject ? all.filter((page) => subjectOf(page) === subject) : all
   const visible = pages.filter(isVisible)
   const outgoing = visible.filter((page) => (page.links ?? []).length > 0)
   const incoming = new Set()

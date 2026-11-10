@@ -29,6 +29,8 @@ export const EDITABLE = {
   'mood.halfLifeHours': { type: 'number', min: 1, max: 72 },
   'prompt.order': { type: 'number', min: 0, max: 1000, restart: true },
   'prompt.maxChars': { type: 'number', min: 200, max: 8000 },
+  'prompt.userOrder': { type: 'number', min: 0, max: 1000, restart: true },
+  'prompt.userMaxChars': { type: 'number', min: 0, max: 4000 },
   'memory.halfLifeDays': { type: 'number', min: 1, max: 365 },
   'memory.indexMaxLines': { type: 'number', min: 1, max: 20 },
   'memory.indexMaxChars': { type: 'number', min: 40, max: 4000 },

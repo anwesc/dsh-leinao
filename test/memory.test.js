@@ -4,8 +4,9 @@ import assert from 'node:assert/strict'
 import { makeEvent } from '../src/journal.js'
 import { emptyState, fold } from '../src/replay.js'
 import { MEMORY, foldCandidates, memoryIndex, memoryStats, searchPages, strengthOf } from '../src/memory.js'
-import { buildInjection } from '../src/prompt.js'
+import { buildInjection, buildUserInjection } from '../src/prompt.js'
 import { registerPersonaTools } from '../src/tools.js'
+import { observationLines, observationStats } from '../src/observations.js'
 
 const at = (iso) => new Date(iso)
 const DAY = 86400000
@@ -112,7 +113,7 @@ test('prompt: 记忆目录和整理提醒会进注入块', () => {
   assert.match(text, /记忆整理/)
 })
 
-function rig() {
+function rig(extra = {}) {
   const tools = []
   const events = []
   let state = emptyState()
@@ -125,6 +126,7 @@ function rig() {
       state = fold(events).state
       return event
     },
+    ...extra,
   }
   const ctx = { tools: { register: (tool) => tools.push(tool) } }
   registerPersonaTools(ctx, (definition) => definition, rt)
@@ -241,4 +243,117 @@ test('tools: remember 的 links 只收存在且可见的页，不填时保留原
 
   const recalled = await tool('persona_recall').execute({ path: 'events/job' })
   assert.match(recalled, /相关：people\/laoda/)
+})
+
+test('replay: page 的 subject 默认 self，user 页更新时不丢', () => {
+  const { state } = fold([
+    makeEvent('page', 'dev', { path: 'self/a', title: 'A', content: 'c' }, at('2026-10-01T10:00:00+08:00')),
+    makeEvent('page', 'dev', { path: 'people/laoda', subject: 'user', title: '老大', content: '爱打游戏' }, at('2026-10-01T10:00:00+08:00')),
+    makeEvent('page', 'dev', { path: 'people/laoda', content: '最近常加班' }, at('2026-10-02T10:00:00+08:00')),
+  ])
+  assert.equal(state.pages['self/a'].subject, 'self')
+  assert.equal(state.pages['people/laoda'].subject, 'user')
+  assert.equal(state.pages['people/laoda'].content, '最近常加班')
+})
+
+test('memory: subject 过滤把人格记忆和用户模型分开', () => {
+  const now = Date.parse('2026-11-01T00:00:00Z')
+  const state = {
+    pages: {
+      'self/1': page({ path: 'self/1', title: '我的事', content: '我记得', tags: [], subject: 'self' }),
+      'people/laoda': page({
+        path: 'people/laoda',
+        title: '老大',
+        content: '爱打游戏',
+        subject: 'user',
+        updatedAt: '2026-10-31T00:00:00Z',
+      }),
+    },
+  }
+  const self = memoryIndex(state, now, '老大', { subject: 'self' })
+  assert.ok(!self.selected.some((item) => item.path === 'people/laoda'))
+  const user = memoryIndex(state, now, '老大', { subject: 'user' })
+  assert.ok(user.selected.some((item) => item.path === 'people/laoda'))
+  assert.equal(memoryStats(state, 'self').visible, 1)
+  assert.equal(memoryStats(state, 'user').visible, 1)
+  assert.equal(searchPages(state, '老大', 3, { subject: 'self' }).length, 0)
+})
+
+test('tools: remember subject=user 写进用户模型，recall 可以只查一边', async () => {
+  const { tool, state } = rig()
+  const out = await tool('persona_remember').execute({
+    subject: 'user',
+    title: '老大爱打游戏',
+    content: '下班常打游戏',
+    path: 'people/laoda',
+  })
+  assert.match(out, /关于老大/)
+  assert.equal(state().pages['people/laoda'].subject, 'user')
+  assert.match(await tool('persona_recall').execute({ query: '打游戏', subject: 'user' }), /下班常打游戏/)
+  assert.match(await tool('persona_recall').execute({ query: '打游戏', subject: 'self' }), /没找到/)
+  await tool('persona_seed').execute({ name: '阿鱼' })
+  assert.match(await tool('persona_state').execute(), /关于老大 1 条页 \/ 0 条观察/)
+})
+
+test('prompt: 用户模型块单独成段，带用途限定；没有观察时为空', () => {
+  assert.equal(buildUserInjection({ phase: 'seed' }), '')
+  const text = buildUserInjection({ phase: 'active' }, { memory: '【关于老大】你观察到的事（不是他自己说的）：\n- 爱打游戏' })
+  assert.match(text, /爱打游戏/)
+  assert.match(text, /不要拿它编/)
+  assert.equal(buildUserInjection({ phase: 'active' }, { memory: '   ' }), '')
+})
+
+test('observations: 同 key 覆盖，保留首次时间与次数；非法事件被跳过', () => {
+  const { state, diagnostics } = fold([
+    makeEvent(
+      'observation',
+      'dev-t',
+      { key: '作息', value: '常熬夜写代码', evidence: '又是两点', confidence: 0.4 },
+      at('2026-10-01T10:00:00+08:00'),
+    ),
+    makeEvent(
+      'observation',
+      'dev-t',
+      { key: '作息', value: '最近在调早睡', evidence: '今天十一点睡', confidence: 0.7 },
+      at('2026-10-05T10:00:00+08:00'),
+    ),
+    makeEvent('observation', 'dev-t', { key: '', value: '没有 key' }, at('2026-10-05T11:00:00+08:00')),
+  ])
+  const item = state.observations['作息']
+  assert.equal(item.value, '最近在调早睡')
+  assert.equal(item.count, 2)
+  assert.equal(item.at, '2026-10-01T10:00:00+08:00')
+  assert.equal(item.updatedAt, '2026-10-05T10:00:00+08:00')
+  assert.equal(diagnostics.skipped, 1)
+  assert.deepEqual(observationLines(state), ['- 作息：最近在调早睡'])
+  assert.deepEqual(observationStats(state), { count: 1, confident: 1 })
+})
+
+test('observations: 低置信度会被标出来，注入只取前几条', () => {
+  const { state } = fold([
+    makeEvent('observation', 'dev-t', { key: '作息', value: '常熬夜', confidence: 0.4 }, at('2026-10-01T10:00:00+08:00')),
+    makeEvent('observation', 'dev-t', { key: '口味', value: '爱吃辣', confidence: 0.9 }, at('2026-10-02T10:00:00+08:00')),
+    makeEvent('observation', 'dev-t', { key: '沟通', value: '喜欢先结论', confidence: 0.8 }, at('2026-10-03T10:00:00+08:00')),
+  ])
+  const lines = observationLines(state, { limit: 2 })
+  assert.equal(lines.length, 2)
+  assert.match(lines[0], /口味：爱吃辣/)
+  assert.match(observationLines(state)[0], /常熬夜|爱吃辣/)
+  const low = observationLines(state).find((line) => line.includes('常熬夜'))
+  assert.match(low, /不太确定/)
+})
+
+test('tools: persona_observe 必须带原话证据，同 key 覆盖', async () => {
+  const verified = rig({ verifyEvidence: (quote) => quote.includes('又是两点') })
+  const observe = verified.tool('persona_observe')
+  assert.match(await observe.execute({ key: '作息', value: '常熬夜', evidence: '嗯' }), /没有记/)
+  assert.match(await observe.execute({ key: '作息', value: '常熬夜', evidence: '老板昨天说的' }), /找不到原话/)
+  assert.match(await observe.execute({ key: '作息', value: '常熬夜写代码', evidence: '又是两点', confidence: 0.8 }), /记下了观察/)
+  assert.equal(verified.state().observations['作息'].value, '常熬夜写代码')
+  assert.equal(verified.state().observations['作息'].confidence, 0.8)
+  assert.match(await observe.execute({ key: '作息', value: '最近早睡了', evidence: '又是两点' }), /记下了观察/)
+  assert.equal(verified.state().observations['作息'].value, '最近早睡了')
+  assert.equal(verified.state().observations['作息'].count, 2)
+  await verified.tool('persona_seed').execute({ name: '阿鱼' })
+  assert.match(await verified.tool('persona_state').execute(), /1 条观察/)
 })

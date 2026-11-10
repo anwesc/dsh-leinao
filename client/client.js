@@ -71,6 +71,8 @@ window.__ModuleLoader__.load({
         rows: [
           { key: 'prompt.maxChars', kind: 'number', label: '注入上限', hint: '超过就截断，宁短勿长', unit: '字符', min: 200, max: 8000, step: 100 },
           { key: 'prompt.order', kind: 'number', label: '注入顺序', hint: '数值小的排前面；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
+          { key: 'prompt.userMaxChars', kind: 'number', label: '用户模型上限', hint: '关于老大的观察单独一块，0 表示关掉', unit: '字符', min: 0, max: 4000, step: 50 },
+          { key: 'prompt.userOrder', kind: 'number', label: '用户模型顺序', hint: '通常紧跟人格块；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
         ],
       },
       {
@@ -420,6 +422,7 @@ window.__ModuleLoader__.load({
                   h('span', { style: { ...S.chip, ...S.chipAccent } }, `阶段 ${PHASE_LABEL[status.phase] ?? status.phase ?? '—'}`),
                   h('span', { style: S.chip }, `${status.turns ?? 0} 轮对话`),
                   h('span', { style: S.chip }, `${status.memories ?? 0} 条记忆`),
+                  h('span', { style: S.chip }, `${(status.userMemories ?? 0) + (status.observations ?? 0)} 条观察`),
                   h('span', { style: S.chip }, `${status.events ?? 0} 条事件`),
                 ),
                 h('p', { style: S.path }, `数据目录：${status.dataDir ?? '—'}`),

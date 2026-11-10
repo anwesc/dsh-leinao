@@ -32,6 +32,9 @@ export const DEFAULT_CONFIG = {
   prompt: {
     order: 130,
     maxChars: 1_200,
+    /** 关于老大的观察：单独一块注入，单独预算 */
+    userOrder: 131,
+    userMaxChars: 400,
   },
   memory: {
     /** 强度减半天数 */

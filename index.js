@@ -21,8 +21,9 @@ import { DEFAULT_CONFIG, loadConfig } from './src/config.js'
 import { ensureDeviceId } from './src/device.js'
 import { appendEvent, makeEvent } from './src/journal.js'
 import { ensureDirs, loadState, personaPaths, saveState, writeFileAtomic } from './src/store.js'
-import { renderProfile, writeProfile } from './src/render.js'
-import { buildInjection } from './src/prompt.js'
+import { renderProfile, writeProfile, writeUserModel } from './src/render.js'
+import { buildInjection, buildUserInjection } from './src/prompt.js'
+import { observationLines, observationStats } from './src/observations.js'
 import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
 import { detectMend } from './src/bond.js'
@@ -266,7 +267,7 @@ export function apply(ctx, inlineConfig = {}) {
       try {
         const { state } = refresh()
         const now = Date.now()
-        const index = memoryIndex(state, now, lastCue, cfg.memory)
+        const index = memoryIndex(state, now, lastCue, { ...cfg.memory, subject: 'self' })
         const text = buildInjection(state, now, {
           memory: index.text,
           reminder: foldReminder(state, now),
@@ -276,6 +277,32 @@ export function apply(ctx, inlineConfig = {}) {
         return cap > 0 && text.length > cap ? `${text.slice(0, Math.max(1, cap - 1))}…` : text
       } catch (error) {
         log.warn?.(`[leinao] 生成注入块失败：${error.message}`)
+        return ''
+      }
+    },
+  })
+
+  // ── system prompt：关于老大的观察（单独一块、单独预算，可整体关掉） ─────
+  ctx.systemPrompt.context({
+    name: 'about-user',
+    order: Number(cfg.prompt.userOrder) || 131,
+    interpolate: false,
+    text: () => {
+      try {
+        const { state } = refresh()
+        if (state.phase === 'seed') return ''
+        const index = memoryIndex(state, Date.now(), lastCue, {
+          ...cfg.memory,
+          subject: 'user',
+          header: '【关于老大】你观察到的事（不是他自己说的）：',
+        })
+        const text = buildUserInjection(state, {
+          memory: [observationLines(state).join('\n'), index.text].filter(Boolean).join('\n'),
+        })
+        const cap = Number(cfg.prompt.userMaxChars) || 0
+        return cap > 0 && text.length > cap ? `${text.slice(0, Math.max(1, cap - 1))}…` : text
+      } catch (error) {
+        log.warn?.(`[leinao] 生成用户模型块失败：${error.message}`)
         return ''
       }
     },
@@ -303,6 +330,8 @@ export function apply(ctx, inlineConfig = {}) {
         deviceId,
         dataDir,
         memories: stats.visible,
+        userMemories: memoryStats(current.state, 'user').visible,
+        observations: observationStats(current.state).count,
         folded: stats.folded,
         enabled: cfg.enabled,
       }
@@ -383,6 +412,7 @@ export function apply(ctx, inlineConfig = {}) {
           writeFileAtomic(file, text)
           return file
         },
+        writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood }),
       })
       log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')
     } catch (error) {

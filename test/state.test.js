@@ -149,6 +149,46 @@ test('prompt: 注入块不会长到失控', () => {
   assert.ok(seedInjection().length < 400)
 })
 
+test('render: PROFILE 分「我」和「关于老大」，USER.md 可单独拿走', () => {
+  const { dir, cleanup } = tmp()
+  try {
+    const { state } = fold([
+      makeEvent('seed', 'dev-a', { name: '阿鱼', userCall: '老大' }, at('2026-11-01T10:00:00+08:00')),
+      makeEvent('page', 'dev-a', { path: 'self/job', title: '我的事', content: '我记得的事' }, at('2026-11-01T10:01:00+08:00')),
+      makeEvent(
+        'page',
+        'dev-a',
+        { path: 'people/laoda', subject: 'user', title: '老大', content: '爱打游戏', gist: '下班打游戏' },
+        at('2026-11-01T10:02:00+08:00'),
+      ),
+      makeEvent(
+        'observation',
+        'dev-a',
+        { key: '作息', value: '常熬夜写代码', evidence: '又是两点', confidence: 0.7 },
+        at('2026-11-01T10:03:00+08:00'),
+      ),
+    ])
+    const text = renderProfile(state, at('2026-11-01T10:10:00+08:00').getTime())
+    assert.match(text, /## 关于老大/)
+    assert.match(text, /观察 \*\*1\*\* 条/)
+    assert.match(text, /下班打游戏/)
+    assert.match(text, /view\/USER\.md/)
+
+    writeProfile(dir, state, at('2026-11-01T10:10:00+08:00').getTime())
+    assert.equal(personaPaths(dir).userModel, join(dir, 'view', 'USER.md'))
+    const user = readFileSync(personaPaths(dir).userModel, 'utf8')
+    assert.match(user, /# 关于老大/)
+    assert.match(user, /## 观察/)
+    assert.match(user, /常熬夜写代码/)
+    assert.match(user, /原话「又是两点」/)
+    assert.match(user, /爱打游戏/)
+    assert.ok(!user.includes('我的事'), '人格记忆不能混进 USER.md')
+    assert.match(readFileSync(personaPaths(dir).profile, 'utf8'), /我的事/)
+  } finally {
+    cleanup()
+  }
+})
+
 test('fold 的 applyEvent 不认识的事件返回 false', () => {
   const state = emptyState()
   assert.equal(applyEvent(state, { kind: 'wat', at: '2026-11-01T10:00:00+08:00' }), false)

@@ -5,7 +5,8 @@
 import { AXES, AXIS_LABELS } from './traits.js'
 import { band, baseline, decay } from './mood.js'
 import { bondLabel, riftLevelLabel } from './bond.js'
-import { isVisible, memoryStats } from './memory.js'
+import { isVisible, memoryStats, subjectOf } from './memory.js'
+import { observationList, observationStats } from './observations.js'
 import { writeFileAtomic } from './store.js'
 import { personaPaths } from './store.js'
 import { localIso } from './journal.js'
@@ -91,14 +92,14 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
     lines.push('')
   }
 
-  const memory = memoryStats(state)
+  const memory = memoryStats(state, 'self')
   if (memory.visible) {
     lines.push('## 记忆', '')
     lines.push(
       `- 在册 **${memory.visible}** 条${memory.folded ? `（整理页 ${memory.folded}）` : ''} · 有互链 ${memory.linked} 条 · 孤立 ${memory.isolated} 条`,
     )
     const recent = Object.values(state.pages)
-      .filter(isVisible)
+      .filter((page) => isVisible(page) && subjectOf(page) === 'self')
       .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
       .slice(0, 5)
     for (const page of recent) {
@@ -107,6 +108,22 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
     }
     lines.push('')
   }
+
+  const userModel = memoryStats(state, 'user')
+  const observed = observationStats(state)
+  lines.push('## 关于老大', '')
+  lines.push(
+    `- 观察 **${observed.count}** 条（较确定 ${observed.confident} 条） · 记忆页 ${userModel.visible} 条（单独一份：\`view/USER.md\`）`,
+  )
+  const observations = Object.values(state.pages)
+    .filter((page) => isVisible(page) && subjectOf(page) === 'user')
+    .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
+    .slice(0, 5)
+  for (const page of observations) {
+    const gist = page.gist ?? String(page.content ?? '').split('\n')[0]
+    lines.push(`- ${page.title}（\`${page.path}\`）${gist ? `：${String(gist).slice(0, 60)}` : ''}`)
+  }
+  lines.push('')
 
   const stats = state.stats ?? {}
   lines.push('## 记录', '')
@@ -118,9 +135,60 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
   return lines.join('\n')
 }
 
+/**
+ * 用户模型单独一份：可读、可删、可直接拷走。
+ * 只收 subject=user 的页；人格记忆一条都不混进来。
+ */
+export function renderUserModel(state, nowMs = Date.now()) {
+  const pages = Object.values(state?.pages ?? {})
+    .filter((page) => isVisible(page) && subjectOf(page) === 'user')
+    .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
+  const stats = memoryStats(state, 'user')
+  const observed = observationList(state)
+  const lines = []
+  lines.push('# 关于老大（用户模型）', '')
+  lines.push('> 类脑从对话里攒下的观察，可以单独拿走。')
+  lines.push('> 观察不是他的自我描述；删掉之后重放 journal 仍会重新生成。')
+  lines.push(`> 生成于 ${fmtTime(localIso(new Date(nowMs)))} · 勿手改`, '')
+  if (!pages.length && !observed.length) {
+    lines.push('（还没有观察。）', '')
+    return lines.join('\n')
+  }
+  if (observed.length) {
+    lines.push('## 观察', '')
+    for (const item of observed) {
+      const evidence = item.evidence ? `（原话「${String(item.evidence).slice(0, 60)}」）` : ''
+      lines.push(`- **${item.key}**：${item.value} · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}${evidence}`)
+    }
+    lines.push('')
+  }
+  if (pages.length) {
+    lines.push(`记忆页在册 **${stats.visible}** 条 · 有互链 ${stats.linked} 条 · 孤立 ${stats.isolated} 条`, '')
+    for (const page of pages) {
+      lines.push(`## ${page.title}（\`${page.path}\`）`, '')
+      if (page.gist) lines.push(`> ${page.gist}`, '')
+      if (page.tags?.length) lines.push(`- 标签：${page.tags.join('、')}`)
+      lines.push(`- 更新：${fmtTime(page.updatedAt ?? page.at)}`)
+      const links = (page.links ?? []).filter((path) => isVisible(state.pages[path]))
+      if (links.length) lines.push(`- 相关：${links.map((path) => `\`${path}\``).join('、')}`)
+      lines.push('')
+      if (page.content) lines.push(String(page.content).trim(), '')
+    }
+  }
+  return lines.join('\n')
+}
+
+export function writeUserModel(dataDir, state, nowMs = Date.now()) {
+  const paths = personaPaths(dataDir)
+  const text = renderUserModel(state, nowMs)
+  writeFileAtomic(paths.userModel, text)
+  return text
+}
+
 export function writeProfile(dataDir, state, nowMs = Date.now(), options = {}) {
   const paths = personaPaths(dataDir)
   const text = renderProfile(state, nowMs, options)
   writeFileAtomic(paths.profile, text)
+  writeUserModel(dataDir, state, nowMs)
   return text
 }

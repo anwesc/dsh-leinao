@@ -15,6 +15,8 @@ export function personaPaths(dataDir) {
     journal: join(dataDir, 'journal'),
     view: join(dataDir, 'view'),
     profile: join(dataDir, 'view', 'PROFILE.md'),
+    /** 用户模型单独一份，可以直接拷走 */
+    userModel: join(dataDir, 'view', 'USER.md'),
     state: join(dataDir, 'state.json'),
     device: join(dataDir, 'device.json'),
   }
