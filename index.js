@@ -28,12 +28,14 @@ import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
 import { detectMend } from './src/bond.js'
 import { foldCandidates, memoryIndex, memoryStats } from './src/memory.js'
-import { installSettingsApi } from './src/settings.js'
+import { ActivityTracker, ProactiveNudge } from './src/proactive.js'
+import { SessionGate } from './src/sessions.js'
+import { installSessionApi, installSettingsApi } from './src/settings.js'
 import { SHIFT } from './src/traits.js'
 import { commitAll, createBackoff, ensureRepo, hasRemote, sync } from './src/git.js'
 
 export const name = 'persona'
-export const inject = ['tools', 'systemPrompt']
+export const inject = ['tools', 'systemPrompt', 'agents']
 
 /**
  * 测试接缝：DSH 宿主里 defineTool 由 @deepseek-ai/dsh-tools 提供，
@@ -130,6 +132,30 @@ export function apply(ctx, inlineConfig = {}) {
   let current = loadState(dataDir)
   const evidence = createEvidenceCheck()
   const backoff = createBackoff()
+  /** 会话级开关：某个会话可以单独关掉主动开口（全局仍开） */
+  const sessionGate = new SessionGate({
+    path: join(cfg.dshHome, 'leinao-sessions.json'),
+    ttlDays: cfg.proactive?.sessionTtlDays,
+  })
+  /** 活跃会话表，由下面的 agent/created 订阅填充；会话内开关要用它兜底找当前会话 */
+  let tracker
+
+  const sessionCwd = (agent) => agent?.session?.header?.cwd
+
+  /**
+   * 按会话 id 找 agent：优先查注册表，找不到再扫 roots（有的宿主用
+   * session.header.id 而不是 agent.id）。没传 id 就用最近说过话的那个。
+   */
+  function findAgent(sessionId) {
+    const agents = ctx.agents
+    if (!agents) return undefined
+    const id = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : tracker?.activeId?.()
+    if (!id) return undefined
+    const direct = typeof agents.get === 'function' ? agents.get(id) : undefined
+    if (direct !== undefined) return direct
+    const roots = typeof agents.roots === 'function' ? agents.roots() : []
+    return roots.find((agent) => agent.id === id || agent.session?.header?.id === id || agent.session?.id === id)
+  }
   /** 最近一句用户原话：记忆索引靠它做弱命中 */
   let lastCue = ''
   let reminderTurn = null
@@ -308,6 +334,111 @@ export function apply(ctx, inlineConfig = {}) {
     },
   })
 
+  // ── 主动开口 ─────────────────────────────────────────────────────────
+  // 只挂 root agent：子 agent 是干活的，不该有"人格"。
+  // 没有 agents 服务就安静地不开口，其余功能不受影响。
+  ctx.effect?.(() => {
+    const agents = ctx.agents
+    if (!agents?.roots || typeof ctx.on !== 'function') return () => {}
+    const trackerLocal = new ActivityTracker({ agents, logger: log })
+    tracker = trackerLocal
+    let off = () => {}
+    try {
+      off = ctx.on('agent/created', ({ agent } = {}) => {
+        try {
+          if (!agent) return
+          if (!agents.roots().includes(agent)) return
+          trackerLocal.attach(agent)
+          const nudge = new ProactiveNudge(agent, {
+            readConfig: () => cfg.proactive,
+            getState: () => refresh().state,
+            record,
+            agents,
+            tracker: trackerLocal,
+            logger: log,
+            lockPath: join(cfg.dshHome, 'proactive-cooldown.json'),
+            pollIntervalMs: cfg.proactive?.pollIntervalMs,
+            isEnabled: () => sessionGate.proactiveEnabled(agent.id, cfg.proactive?.enabled !== false, sessionCwd(agent)),
+          })
+          agent.ctx?.effect?.(() => {
+            nudge.start()
+            return () => nudge.dispose()
+          })
+        } catch (error) {
+          log.warn?.(`[leinao] 挂主动开口失败：${error.message}`)
+        }
+      })
+    } catch (error) {
+      log.warn?.(`[leinao] 订阅 agent/created 失败：${error.message}`)
+    }
+    return () => {
+      try {
+        off?.()
+      } catch {
+        // 已经断了就算了
+      }
+      trackerLocal.dispose()
+    }
+  }, 'leinao.proactive()')
+
+  // ── 会话命令 ─────────────────────────────────────────────────────────
+  // `/leinao proactive on|off|status|clear`：只影响当前会话，不动全局配置。
+  ctx.inject?.(['commands'], (cmdCtx) => {
+    const register = () =>
+      cmdCtx.commands?.register?.({
+        name: 'leinao',
+        description: '类脑：本会话的主动开口开关（/leinao proactive on|off|status）',
+        handler: ({ agent, rawInput } = {}) => {
+          try {
+            const id = agent?.id
+            if (!id) return { kind: 'error', text: '拿不到当前会话 id，没法记住这个开关。' }
+            const arg = String(rawInput ?? '').trim().toLowerCase()
+            const globalOn = cfg.proactive?.enabled !== false
+            const cwd = sessionCwd(agent)
+            if (!arg || arg === 'status' || arg === 'proactive status') {
+              const status = sessionGate.describe(id, globalOn, cwd)
+              const overrideText = status.override === undefined ? '默认' : status.override ? '显式开' : '显式关'
+              const workspaceText = status.workspaceDisabled ? '，此工作区默认关' : ''
+              return {
+                kind: 'success',
+                text: `主动开口：${status.effective ? '开' : '关'}（本会话${overrideText}${workspaceText}，全局${globalOn ? '开' : '关'}）`,
+              }
+            }
+            if (arg === 'on' || arg === 'proactive on') {
+              sessionGate.setOverride(id, true)
+              return { kind: 'success', text: '本会话已允许主动开口。' }
+            }
+            if (arg === 'off' || arg === 'proactive off') {
+              sessionGate.setOverride(id, false)
+              return { kind: 'success', text: '本会话已关闭主动开口（全局配置不变）。' }
+            }
+            if (arg === 'clear' || arg === 'reset') {
+              sessionGate.clearOverride(id)
+              return { kind: 'success', text: '已清掉本会话的覆盖，回到全局默认。' }
+            }
+            if (arg === 'workspace off' || arg === 'workspace-off' || arg === 'workspace on' || arg === 'workspace-on') {
+              const off = arg === 'workspace off' || arg === 'workspace-off'
+              if (!sessionGate.setWorkspace(cwd, off)) {
+                return { kind: 'error', text: '这个会话没有工作区目录，改不了工作区默认。' }
+              }
+              return { kind: 'success', text: off ? '此工作区默认关闭主动开口。' : '此工作区默认开启主动开口。' }
+            }
+            return { kind: 'error', text: '用法：/leinao proactive on | off | status | clear | workspace on | workspace off' }
+          } catch (error) {
+            return { kind: 'error', text: `会话开关失败：${error.message}` }
+          }
+        },
+      })
+    if (typeof cmdCtx.effect === 'function') {
+      cmdCtx.effect(() => {
+        const dispose = register()
+        return () => dispose?.()
+      }, 'leinao.command()')
+    } else {
+      register()
+    }
+  })
+
   // ── 设置页 ────────────────────────────────────────────────────────────
   // 客户端读写的就是 $DSH_HOME/leinao.json；写完 reload 把 cfg 就地更新，下一轮生效。
   // dataDir / deviceId / prompt.order / journal.git 启动时已经定下，UI 上标「需重启」。
@@ -337,6 +468,13 @@ export function apply(ctx, inlineConfig = {}) {
       }
     },
     overridden: () => Object.keys(inlineConfig ?? {}),
+    log,
+  })
+
+  installSessionApi(ctx, {
+    gate: sessionGate,
+    resolveAgent: findAgent,
+    globalEnabled: () => cfg.proactive?.enabled !== false,
     log,
   })
 

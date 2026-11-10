@@ -42,9 +42,18 @@ export const EDITABLE = {
   'memory.foldEveryTurns': { type: 'number', min: 0, max: 1000 },
   'memory.foldMaxPrompts': { type: 'number', min: 0, max: 100 },
   'memory.weakRecallHours': { type: 'number', min: 0, max: 720 },
+  'proactive.enabled': { type: 'boolean' },
+  'proactive.minMinutes': { type: 'number', min: 0, max: 1440 },
+  'proactive.maxMinutes': { type: 'number', min: 0, max: 1440 },
+  'proactive.maxPerSession': { type: 'number', min: 0, max: 10 },
+  'proactive.cooldownSeconds': { type: 'number', min: 0, max: 3600 },
+  'proactive.minStrength': { type: 'number', min: 0, max: 1 },
+  'proactive.rementionDays': { type: 'number', min: 0, max: 365 },
+  'proactive.sessionTtlDays': { type: 'number', min: 0, max: 365 },
 }
 
 const CONFIG_PATH = '/dsh-leinao/config'
+const SESSION_PATH = '/dsh-leinao/session'
 const BODY_LIMIT_BYTES = 64 * 1024
 const isPlain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -275,4 +284,73 @@ export function installSettingsApi(ctx, { file, getConfig, getDefaults, reload, 
   return true
 }
 
-export { CONFIG_PATH as SETTINGS_PATH }
+export { CONFIG_PATH as SETTINGS_PATH, SESSION_PATH }
+
+/**
+ * 注册会话内开关接口：`GET /dsh-leinao/session?sessionId=…` 读状态，
+ * `POST {action, sessionId}` 改状态（on / off / clear / workspace-on / workspace-off）。
+ *
+ * 设置面板没有自己的会话 id，缺省时用「最近说过话的活跃会话」代理；
+ * 浏览器里的 chip 每次都显式带 sessionId。
+ */
+export function installSessionApi(ctx, { gate, resolveAgent, globalEnabled = () => true, log } = {}) {
+  if (typeof ctx?.inject !== 'function' || !gate || typeof resolveAgent !== 'function') return false
+  const cwdOf = (agent) => agent?.session?.header?.cwd
+  const describe = (agent) => ({ ok: true, ...gate.describe(agent.id, globalEnabled(), cwdOf(agent)) })
+
+  const handle = async (request, response) => {
+    if (!isSameOrigin(request)) return sendJson(response, 403, { error: '来源不被信任（只允许本机）' })
+    const method = String(request?.method ?? 'GET').toUpperCase()
+    try {
+      if (method === 'GET') {
+        const url = new URL(String(request?.url ?? '/'), 'http://localhost')
+        const agent = resolveAgent(url.searchParams.get('sessionId') ?? undefined)
+        if (!agent) return sendJson(response, 200, { ok: false, reason: 'no-session' })
+        return sendJson(response, 200, describe(agent))
+      }
+      if (method === 'POST') {
+        const body = JSON.parse((await readBody(request)) || '{}')
+        const agent = resolveAgent(typeof body?.sessionId === 'string' ? body.sessionId : undefined)
+        if (!agent) return sendJson(response, 200, { ok: false, reason: 'no-session' })
+        const action = String(body?.action ?? '')
+        if (action === 'on' || action === 'off') {
+          gate.setOverride(agent.id, action === 'on')
+        } else if (action === 'clear') {
+          gate.clearOverride(agent.id)
+        } else if (action === 'workspace-on' || action === 'workspace-off') {
+          if (!gate.setWorkspace(cwdOf(agent), action === 'workspace-off')) {
+            return sendJson(response, 400, { error: '这个会话没有工作区目录' })
+          }
+        } else {
+          return sendJson(response, 400, { error: `不认识的操作：${JSON.stringify(action)}` })
+        }
+        return sendJson(response, 200, describe(agent))
+      }
+      return sendJson(response, 405, { error: '不支持的方法' })
+    } catch (error) {
+      log?.warn?.(`[leinao] 会话开关请求失败：${error.message}`)
+      return sendJson(response, 400, { error: String(error?.message ?? error) })
+    }
+  }
+
+  ctx.inject(['webServer'], (host) => {
+    const server = host?.webServer
+    if (!server || typeof server.register !== 'function') {
+      log?.warn?.('[leinao] webServer 不可用，会话内开关没挂上')
+      return
+    }
+    const mount = () => {
+      const dispose = server.register({ kind: 'exact', path: SESSION_PATH, handler: handle })
+      return () => {
+        try {
+          dispose?.()
+        } catch {
+          /* 宿主卸载时路由可能已经没了 */
+        }
+      }
+    }
+    if (typeof host.effect === 'function') host.effect(mount, 'leinao: session api')
+    else mount()
+  })
+  return true
+}

@@ -40,6 +40,16 @@ function fakeCtx() {
         ctx.registered.push(tool)
       },
     },
+    commands: {
+      register(definition) {
+        ctx.commandsRegistered.push(definition)
+        return () => {}
+      },
+    },
+    commandsRegistered: [],
+    inject(names, callback) {
+      if (names.includes('commands')) callback(ctx)
+    },
   }
   return ctx
 }
@@ -254,6 +264,34 @@ test('plugin: 用户模型单独一块注入，和人格记忆分开', async (t)
   assert.ok(!/【记忆】/.test(block.text()), '用户模型块不该带人格记忆的头')
   assert.ok(!/下班常打游戏/.test(ctx.prompt.text()), '人格块不该带用户模型的内容')
   assert.ok(!/常熬夜写代码/.test(ctx.prompt.text()), '人格块不该带观察')
+})
+
+test('plugin: /leinao proactive on|off 只影响当前会话，落盘可查', async (t) => {
+  const { dir, ctx } = setup(t)
+  const command = ctx.commandsRegistered.find((item) => item.name === 'leinao')
+  assert.ok(command, '应注册 /leinao 命令')
+  const agent = { id: 'session-abc' }
+
+  const status0 = command.handler({ agent, rawInput: 'status' })
+  assert.equal(status0.kind, 'success')
+  assert.match(status0.text, /主动开口：开/)
+  assert.match(status0.text, /默认/)
+
+  const off = command.handler({ agent, rawInput: 'proactive off' })
+  assert.match(off.text, /已关闭/)
+  const saved = JSON.parse(readFileSync(join(dir, '.dsh', 'leinao-sessions.json'), 'utf8'))
+  assert.equal(saved.sessions['session-abc'].proactive, false)
+
+  const status1 = command.handler({ agent, rawInput: '' })
+  assert.match(status1.text, /主动开口：关/)
+  assert.match(status1.text, /显式关/)
+
+  const other = command.handler({ agent: { id: 'session-other' }, rawInput: 'status' })
+  assert.match(other.text, /主动开口：开/, '别的会话不受影响')
+
+  const cleared = command.handler({ agent, rawInput: 'clear' })
+  assert.match(cleared.text, /回到全局默认/)
+  assert.match(command.handler({ agent, rawInput: 'nonsense' }).text, /用法/)
 })
 
 test('plugin: seed 只有一次，reset 要 confirm', async (t) => {

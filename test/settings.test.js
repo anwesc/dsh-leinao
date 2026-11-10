@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -13,6 +13,7 @@ import {
   EDITABLE,
   configSnapshot,
   flattenPatch,
+  installSessionApi,
   installSettingsApi,
   mergeIntoFile,
   pickEditable,
@@ -20,6 +21,7 @@ import {
   sanitizePatch,
   writeConfigFile,
 } from '../src/settings.js'
+import { SessionGate } from '../src/sessions.js'
 
 function tempFile(initial) {
   const dir = mkdtempSync(join(tmpdir(), 'leinao-settings-'))
@@ -213,4 +215,87 @@ test('settings: 写文件是原子的，目录里不留 tmp', () => {
   const text = readFileSync(file, 'utf8')
   assert.match(text, /\n$/)
   assert.deepEqual(pickEditable({ a: 1 }), {})
+})
+
+test('settings: 会话开关接口按 session/workspace 两级读写，坏操作明确报错', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'leinao-session-api-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const gate = new SessionGate({ path: join(dir, 'leinao-sessions.json'), ttlDays: 7 })
+  const agent = { id: 's1', session: { header: { cwd: '/work/a' } } }
+
+  let route = null
+  const ctx = {
+    inject(services, callback) {
+      assert.deepEqual(services, ['webServer'])
+      callback({
+        webServer: {
+          register(value) {
+            route = value
+            return () => {
+              route = null
+            }
+          },
+        },
+        effect(fn) {
+          fn()
+        },
+      })
+    },
+  }
+  assert.equal(installSessionApi(ctx, {
+    gate,
+    resolveAgent: (id) => (id === undefined || id === 's1' ? agent : undefined),
+    globalEnabled: () => true,
+  }), true)
+  assert.equal(route?.path, '/dsh-leinao/session')
+
+  const call = async (options) => {
+    const response = fakeResponse()
+    await route.handler(fakeRequest(options), response)
+    return { status: response.status, body: response.json() }
+  }
+
+  const read = await call({ method: 'GET', headers: { host: '127.0.0.1:1' } })
+  assert.equal(read.status, 200)
+  assert.equal(read.body.effective, true)
+  assert.equal(read.body.cwd, '/work/a')
+
+  const off = await call({ method: 'POST', body: { sessionId: 's1', action: 'off' } })
+  assert.equal(off.body.effective, false)
+  assert.equal(gate.getOverride('s1'), false)
+
+  const workspaceOff = await call({ method: 'POST', body: { action: 'workspace-off' } })
+  assert.equal(workspaceOff.body.workspaceDisabled, true)
+  assert.equal(gate.getWorkspaceDisabled('/work/a'), true)
+
+  const cleared = await call({ method: 'POST', body: { sessionId: 's1', action: 'clear' } })
+  assert.equal(cleared.body.effective, false, '工作区默认关时清掉会话覆盖仍然是关')
+
+  const unknown = await call({ method: 'POST', body: { sessionId: 's1', action: 'nope' } })
+  assert.equal(unknown.status, 400)
+  assert.match(unknown.body.error, /nope/)
+
+  const noSession = await call({ method: 'GET', headers: { host: '127.0.0.1:1' }, body: undefined })
+  assert.equal(noSession.body.ok, true)
+
+  const crossOrigin = await call({ method: 'POST', headers: { origin: 'https://evil.example', host: '127.0.0.1:1' }, body: { action: 'on' } })
+  assert.equal(crossOrigin.status, 403)
+})
+
+test('settings: 没有会话时接口回 no-session 而不是报错', async () => {
+  let route = null
+  const ctx = {
+    inject(services, callback) {
+      callback({ webServer: { register(value) { route = value; return () => {} } }, effect(fn) { fn() } })
+    },
+  }
+  installSessionApi(ctx, {
+    gate: new SessionGate({ path: '', ttlDays: 7 }),
+    resolveAgent: () => undefined,
+  })
+  const response = fakeResponse()
+  await route.handler(fakeRequest({ method: 'GET', headers: { host: '127.0.0.1:1' } }), response)
+  assert.equal(response.status, 200)
+  assert.equal(response.json().ok, false)
+  assert.equal(response.json().reason, 'no-session')
 })

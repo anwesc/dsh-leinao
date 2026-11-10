@@ -55,6 +55,24 @@ export const DEFAULT_CONFIG = {
     /** 注入命中后多久内不重复记 recall */
     weakRecallHours: 6,
   },
+  /** 主动开口：对话安静下来后，自己想起一件事说一句。宁缺毋滥。 */
+  proactive: {
+    enabled: true,
+    /** 两次主动开口之间的随机间隔（分钟） */
+    minMinutes: 40,
+    maxMinutes: 120,
+    /** 一次会话最多开口几次 */
+    maxPerSession: 2,
+    /** 跨插件的共享冷却（秒）：别的插件刚说过话就让一让 */
+    cooldownSeconds: 180,
+    pollIntervalMs: 30_000,
+    /** 低于这个强度的记忆不主动提 */
+    minStrength: 0.35,
+    /** 提过之后隔多少天再提同一条 */
+    rementionDays: 14,
+    /** 会话级开关的记忆时长（天）：过期自动清掉，0 表示永不过期 */
+    sessionTtlDays: 7,
+  },
   /** 首次引导的默认值；正式使用应通过 persona_seed 写入 seed 事件 */
   seed: { name: '', gender: '', userCall: '' },
   /** 打开后把主要动作写进日志（排查用） */

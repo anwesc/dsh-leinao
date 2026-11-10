@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-plugin-leinao'
     const API = '/dsh-leinao/config'
+    const SESSION_API = '/dsh-leinao/session'
 
     // 用宿主主题变量（--dsw-alias-*），跟随明暗主题；fallback 只兜底老版本。
     const BORDER = 'var(--dsw-alias-border-l1, rgba(127,127,127,.28))'
@@ -99,6 +100,21 @@ window.__ModuleLoader__.load({
           { key: 'memory.foldEveryTurns', kind: 'number', label: '提醒间隔', hint: '每多少轮提一次；0 表示不提醒', unit: '轮', min: 0, max: 1000, step: 10 },
           { key: 'memory.foldMaxPrompts', kind: 'number', label: '每次会话上限', hint: '提醒最多提几次，免得烦', unit: '次', min: 0, max: 100, step: 1 },
           { key: 'memory.weakRecallHours', kind: 'number', label: '弱召回冷却', hint: '同一页多久内不重复记召回', unit: '小时', min: 0, max: 720, step: 1 },
+        ],
+      },
+      {
+        id: 'proactive',
+        title: '主动开口',
+        hint: '对话安静下来后，自己想起一件事说一句。宁缺毋滥，挑不出合适的就不说话。',
+        rows: [
+          { key: 'proactive.enabled', kind: 'switch', label: '允许主动开口', hint: '关掉后只在你说话时才回应' },
+          { key: 'proactive.minMinutes', kind: 'number', label: '最短间隔', hint: '两次主动开口之间至少隔多久', unit: '分钟', min: 0, max: 1440, step: 5 },
+          { key: 'proactive.maxMinutes', kind: 'number', label: '最长间隔', hint: '实际间隔在这两个值之间随机', unit: '分钟', min: 0, max: 1440, step: 5 },
+          { key: 'proactive.maxPerSession', kind: 'number', label: '每次会话上限', hint: '一次会话最多主动几次', unit: '次', min: 0, max: 10, step: 1 },
+          { key: 'proactive.cooldownSeconds', kind: 'number', label: '跨插件冷却', hint: '别的插件刚说过话就让一让', unit: '秒', min: 0, max: 3600, step: 30 },
+          { key: 'proactive.minStrength', kind: 'number', label: '最低记忆强度', hint: '太弱的旧事不主动提', unit: '0–1', min: 0, max: 1, step: 0.05 },
+          { key: 'proactive.rementionDays', kind: 'number', label: '重提间隔', hint: '同一条记忆隔多少天才能再主动提', unit: '天', min: 0, max: 365, step: 1 },
+          { key: 'proactive.sessionTtlDays', kind: 'number', label: '会话开关保质期', hint: '会话级开关记多久；0 表示永不过期', unit: '天', min: 0, max: 365, step: 1 },
         ],
       },
     ]
@@ -472,6 +488,147 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ---------------- 会话内开关（composer 工具行左侧） ----------------
+    // 与内置 Plan 开关同构：状态来自宿主 /dsh-leinao/session，点击展开下拉，
+    // 分别设置「本会话」与「此工作区默认」。宿主拒绝时把原因显示在菜单底部。
+    const CHIP_BTN = (enabled) => ({
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      padding: '4px 8px',
+      fontSize: 13,
+      lineHeight: '18px',
+      borderRadius: 6,
+      border: 'none',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-secondary, #888)',
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      opacity: enabled ? 1 : 0.55,
+    })
+    const CHIP_MENU = {
+      position: 'absolute',
+      bottom: 'calc(100% + 6px)',
+      left: 0,
+      zIndex: 40,
+      minWidth: 156,
+      padding: 6,
+      borderRadius: 8,
+      border: `1px solid ${BORDER}`,
+      background: 'var(--dsw-alias-bg-layer-2, #fff)',
+      boxShadow: '0 6px 20px rgba(0,0,0,.12)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+    }
+    const CHIP_HEAD = { padding: '4px 8px 2px', fontSize: 11, color: 'var(--dsw-alias-label-secondary, #888)' }
+    const CHIP_ITEM = (active) => ({
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '5px 8px',
+      fontSize: 12,
+      lineHeight: '16px',
+      borderRadius: 5,
+      border: 'none',
+      textAlign: 'left',
+      background: active ? 'var(--dsw-alias-bg-layer-3, rgba(128,128,128,.12))' : 'transparent',
+      color: 'var(--dsw-alias-label-primary, inherit)',
+      cursor: 'pointer',
+    })
+
+    function SessionChip(props) {
+      const sessionId = props?.sessionId
+      const [state, setState] = React.useState(undefined)
+      const [open, setOpen] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+
+      const read = React.useCallback(() => {
+        if (typeof sessionId !== 'string' || sessionId.length === 0) return
+        fetch(`${SESSION_API}?sessionId=${encodeURIComponent(sessionId)}`)
+          .then((response) => response.json())
+          .then((value) => setState(value))
+          .catch(() => setError('读不到开关状态'))
+      }, [sessionId])
+
+      React.useEffect(() => {
+        if (typeof sessionId !== 'string' || sessionId.length === 0) return undefined
+        read()
+        const timer = setInterval(read, 10000)
+        return () => clearInterval(timer)
+      }, [sessionId, read])
+
+      React.useEffect(() => {
+        if (!open || typeof document === 'undefined') return undefined
+        const close = () => setOpen(false)
+        document.addEventListener('mousedown', close)
+        return () => document.removeEventListener('mousedown', close)
+      }, [open])
+
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return null
+      const effective = state === undefined ? true : state.ok !== false && state.effective !== false
+      const workspaceDisabled = state?.workspaceDisabled === true
+
+      const act = (action) => {
+        setBusy(true)
+        setError('')
+        fetch(SESSION_API, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action, sessionId }),
+        })
+          .then(async (response) => {
+            const body = await response.json().catch(() => ({}))
+            if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`)
+            if (body.ok === false) throw new Error('这个会话已经不在运行了')
+            setState(body)
+            setOpen(false)
+          })
+          .catch((err) => setError(String(err?.message ?? err)))
+          .finally(() => setBusy(false))
+      }
+
+      const item = (label, action, active) => h('button', {
+        type: 'button',
+        role: 'menuitemradio',
+        'aria-checked': active,
+        disabled: busy,
+        onClick: (event) => {
+          event.stopPropagation()
+          act(action)
+        },
+        style: CHIP_ITEM(active),
+      }, active ? `\u2713 ${label}` : `  ${label}`)
+
+      const menu = open
+        ? h('div', { role: 'menu', style: CHIP_MENU, onMouseDown: (event) => event.stopPropagation() },
+            h('div', { style: CHIP_HEAD }, '本会话'),
+            item('开', 'on', effective),
+            item('关', 'off', !effective),
+            h('div', { style: { height: 1, margin: '4px 6px', background: BORDER } }),
+            h('div', { style: CHIP_HEAD }, '此工作区默认'),
+            item('开', 'workspace-on', !workspaceDisabled),
+            item('关', 'workspace-off', workspaceDisabled),
+            error ? h('div', { role: 'alert', style: { padding: '4px 8px', fontSize: 11, color: 'var(--dsw-alias-state-error-primary, #e5484d)' } }, error) : null,
+          )
+        : null
+
+      return h('span', { style: { position: 'relative', display: 'inline-flex' } },
+        h('button', {
+          type: 'button',
+          title: '类脑：本会话 / 此工作区的主动开口开关',
+          'aria-label': '类脑主动开口开关',
+          'aria-haspopup': 'menu',
+          'aria-expanded': open,
+          disabled: busy,
+          onClick: () => setOpen((value) => !value),
+          style: CHIP_BTN(effective),
+        }, `\u25cf 类脑${effective ? '' : ' · 关'}`),
+        menu,
+      )
+    }
+
     const name = 'dsh-plugin-leinao'
     const inject = ['slots', 'locale']
 
@@ -492,6 +649,21 @@ window.__ModuleLoader__.load({
         },
         () => h(Section, { t: ctx.locale.bind(NS) }),
       ))
+      // 会话内开关（composer 工具行左侧）。旧宿主可能不声明该 slot：
+      // 注册失败只影响 chip，/leinao 命令与设置面板仍然可用。
+      try {
+        ctx.slots.inject('conversation.input.left', () => ctx.slots.register(
+          {
+            name: 'conversation.input.left',
+            id: `${NS}-session-toggle`,
+            order: 100,
+            locale: NS,
+          },
+          SessionChip,
+        ))
+      } catch {
+        // 没有 composer slot 就算了
+      }
     }
 
     return { name, inject, apply }

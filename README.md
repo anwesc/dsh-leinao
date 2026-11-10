@@ -124,6 +124,14 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `memory.foldEveryTurns` | `30` | 每多少轮提一次整理 |
 | `memory.foldMaxPrompts` | `3` | 一次会话最多提几次 |
 | `memory.weakRecallHours` | `6` | 同一页弱召回的冷却 |
+| `proactive.enabled` | `true` | 允许它在对话安静下来后主动说一句 |
+| `proactive.minMinutes` | `40` | 两次主动开口的最短间隔（分钟） |
+| `proactive.maxMinutes` | `120` | 两次主动开口的最长间隔（分钟），实际在这区间随机 |
+| `proactive.maxPerSession` | `2` | 一次会话最多主动几次 |
+| `proactive.cooldownSeconds` | `180` | 跨插件共享冷却：别的插件刚说过话就让一让 |
+| `proactive.minStrength` | `0.35` | 低于这个强度的记忆不主动提 |
+| `proactive.rementionDays` | `14` | 同一条记忆隔多少天才能再主动提 |
+| `proactive.sessionTtlDays` | `7` | 会话级开关记多久；`0` 表示永不过期 |
 
 环境变量：`DSH_LEINAO_DIR`（换数据目录）、`DSH_LEINAO_CONFIG`（换配置文件路径）。
 
@@ -133,7 +141,7 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 
 DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模块加载器直接加载，不打包）：
 
-- 六组：基本 / 日记与同步 / 心情 / 注入 / 记忆索引 / 整理与召回；顶部一条运行状态（阶段、轮次、记忆条数、数据目录、配置文件）。
+- 七组：基本 / 日记与同步 / 心情 / 注入 / 记忆索引 / 整理与召回 / 主动开口；顶部一条运行状态（阶段、轮次、记忆条数、数据目录、配置文件）。
 - 只写你改过的键：保存时把 diff 发给宿主，宿主合并进 `$DSH_HOME/leinao.json`，**不会把默认值钉死**。
 - 保存后立刻热重载，多数项下一轮生效；`enabled` / `dataDir` / `deviceId` / `journal.git` / `prompt.order` 标了「重启」，要等下次 DSH 启动。
 - 后端是 `src/settings.js` 注册的同源接口 `GET/PUT /dsh-leinao/config`：白名单、类型/范围校验、原子写（tmp + rename），只接受本机回环来源；数值超范围会被夹到区间里。
@@ -218,6 +226,42 @@ DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模�
 - 删除是软删（`forget` 事件），原文永远留在 journal 里；
 - **观察必须有证据**：`persona_observe` 只收能在最近对话里逐字找到的原话；找不到就拒绝写入 —— 宁可这次空着，也不把猜测写成画像。
 
+## 主动开口
+
+对话安静下来、对方又没在等你的时候，它会自己想起一件事，说一句。
+
+- **只在合适的时候**：只挂在 root agent 上（子 agent 是干活的，不插话）；必须 idle、inbox 没有排队的下一步、这个会话里你说过话，而且你是最近说话的那个会话；
+- **有节奏**：两次之间随机 40–120 分钟；第一个空闲点只校准节奏、不开口；一次会话最多 2 次；
+- **有素材才说**：只从强度 ≥ 0.35 的 `self` 记忆里挑，越久没被想起越优先；同一条 14 天内不再提；挑不出来就不说话——沉默比硬找话更像人；
+- **有礼貌**：发之前抢 `$DSH_HOME/proactive-cooldown.json`（`{version:1, speaker, at}`，原子写）；别的主动插件刚说过话，这一轮就让掉；
+- **不额外花钱**：消息以 `user` 角色投进当前会话（`source.kind = 'plugin:leinao'`），由正在跑的模型自己决定接不接，插件不发额外请求。
+
+关掉：`proactive.enabled: false`，或设置页「主动开口 → 允许主动开口」。
+
+**单个会话 / 工作区的开关**（全局仍开着，只让这一处安静）：
+
+对话输入框左边有一个「● 类脑」小按钮，点开分两组：
+
+- **本会话**：开 / 关。只影响当前这个会话；
+- **此工作区默认**：开 / 关。对这个目录以后新建的会话都生效。
+
+优先级：全局 `proactive.enabled` > 本会话显式开关 > 此工作区默认 > 默认开。也就是说
+全局一关全都不开口；会话里显式点「开」能压过工作区默认关。
+
+命令也行：
+
+```
+/leinao proactive status          # 看本会话是开还是关、有没有显式覆盖
+/leinao proactive off             # 本会话别主动开口
+/leinao proactive on              # 恢复
+/leinao proactive clear           # 清掉覆盖，回到全局默认
+/leinao proactive workspace off   # 这个工作区以后默认关
+/leinao proactive workspace on    # 这个工作区以后默认开
+```
+
+覆盖记在 `$DSH_HOME/leinao-sessions.json`（`{version:1, sessions:{[会话id]:{…}}, workspaces:{[目录]:{…}}}`）；
+会话条目按 `proactive.sessionTtlDays` 过期清理，工作区条目是长期偏好、不参与过期。
+
 ## 工具
 
 | 工具 | 用途 |
@@ -270,7 +314,8 @@ cd ~/.leinao && git remote add origin git@github.com:you/leinao-data.git && git 
 - **心情**：愉悦 / 精力 / 紧绷三维，默认 6 小时半衰，启发式情绪标签，六档语气注入。
 - **关系**：`生疏 → 熟络 → 亲近 → 信任` 四级台阶；升级要 30 轮 + 3 天且无未解疙瘩，退级掉一级并留疙瘩；道歉 / 示好会把它一点点浇凉（`mend`）。
 - **记忆**：`page` / `recall` / `fold` / `forget` / `observation` 事件，索引每轮 ≤3 行 / 300 字，召回取全文，整理只提醒、由对话里的模型决定怎么压，软删保留原文；`subject` 把人格记忆和用户模型分开，后者单独投影成 `view/USER.md`。
-- **设置页**：DSH 设置里的「类脑 · 人格」卡片，六组可折叠配置、白名单校验、保存后热重载、需重启项有标记。
+- **设置页**：DSH 设置里的「类脑 · 人格」卡片，七组可折叠配置、白名单校验、保存后热重载、需重启项有标记。
+- **主动开口**：空闲时从旧记忆里挑一条主动说一句；有节奏、有上限、有跨插件冷却，挑不出合适的就沉默。
 - **本地 git**：不交互、离线可写、`pull --rebase` 失败只退避不强推；commit / push 各自防抖。
 
 ## 开发
