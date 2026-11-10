@@ -17,6 +17,8 @@ export const DEFAULT_CONFIG = {
   dshHome: '',
   /** 设备 id；留空自动生成并写入 $DSH_HOME/leinao/device.json */
   deviceId: '',
+  /** 默认怎么称呼用户；seed 时问到的 user_call 优先，这里只是兜底 */
+  userName: '老大',
   journal: {
     git: true,
     push: false,

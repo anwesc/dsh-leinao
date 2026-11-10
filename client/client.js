@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
         open: true,
         rows: [
           { key: 'enabled', kind: 'switch', label: '启用类脑', hint: '关掉后不再注入人格，也不记事件', restart: true },
+          { key: 'userName', kind: 'text', label: '默认称呼', hint: '怎么称呼用户；seed 时问到的称呼优先，这里只是兜底', placeholder: '老大' },
           { key: 'debug', kind: 'switch', label: '调试日志', hint: '把每条事件写进宿主日志，排查用' },
         ],
       },
@@ -72,7 +73,7 @@ window.__ModuleLoader__.load({
         rows: [
           { key: 'prompt.maxChars', kind: 'number', label: '注入上限', hint: '超过就截断，宁短勿长', unit: '字符', min: 200, max: 8000, step: 100 },
           { key: 'prompt.order', kind: 'number', label: '注入顺序', hint: '数值小的排前面；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
-          { key: 'prompt.userMaxChars', kind: 'number', label: '用户模型上限', hint: '关于老大的观察单独一块，0 表示关掉', unit: '字符', min: 0, max: 4000, step: 50 },
+          { key: 'prompt.userMaxChars', kind: 'number', label: '用户模型上限', hint: '用户模型的观察单独一块，0 表示关掉', unit: '字符', min: 0, max: 4000, step: 50 },
           { key: 'prompt.userOrder', kind: 'number', label: '用户模型顺序', hint: '通常紧跟人格块；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
         ],
       },
@@ -298,6 +299,92 @@ window.__ModuleLoader__.load({
       return haystack.includes(needle)
     }
 
+    /**
+     * 标签聚类布局（纯函数，供 GraphCard 与单测共用）：
+     * 每个节点归到它最「大众」的标签下，标签按人数占纬度带；带内再按环排开。
+     */
+    const layoutNodes = (source) => {
+    const nodes = source ?? []
+    if (nodes.length === 0) return []
+    const tagCount = new Map()
+    for (const node of nodes) {
+      for (const tag of node.tags ?? []) tagCount.set(tag, (tagCount.get(tag) ?? 0) + 1)
+    }
+    const bandOf = (node) => {
+      let best = null
+      let bestCount = 0
+      for (const tag of node.tags ?? []) {
+        const count = tagCount.get(tag) ?? 0
+        if (count > bestCount || (count === bestCount && best !== null && tag < best)) {
+          best = tag
+          bestCount = count
+        }
+    }
+    return best ?? `subject:${node.subject ?? 'self'}`
+  }
+  const bands = new Map()
+  for (const node of nodes) {
+    const key = bandOf(node)
+    if (!bands.has(key)) bands.set(key, [])
+    bands.get(key).push(node)
+  }
+  const ordered = [...bands.entries()].sort((a, b) => {
+    if (b[1].length !== a[1].length) return b[1].length - a[1].length
+    return a[0].localeCompare(b[0])
+  })
+  const gap = 0.06
+  const usable = Math.max(0.2, 2 - gap * Math.max(0, ordered.length - 1))
+  const result = []
+  let cursor = 1
+  ordered.forEach(([key, members], bandIndex) => {
+    const height = (members.length / nodes.length) * usable
+    const center = cursor - height / 2
+    cursor -= height + gap
+    members.sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    const perRow = 12
+    const rows = Math.max(1, Math.ceil(members.length / perRow))
+    for (let row = 0; row < rows; row += 1) {
+      const slice = members.slice(row * perRow, (row + 1) * perRow)
+      const y = rows === 1 ? center : center + ((row + 0.5) / rows - 0.5) * height
+      const ring = Math.sqrt(Math.max(0.02, 1 - y * y))
+      slice.forEach((node, index) => {
+        const angle = (index / Math.max(1, slice.length)) * Math.PI * 2 + row * 0.7 + bandIndex * 0.9
+        result.push({ node, band: key, x: Math.cos(angle) * ring, y, z: Math.sin(angle) * ring })
+      })
+    }
+  })
+  return result
+    }
+
+    /** 3D 投影：把旋转后的球坐标落到画布像素上（radius 由画布尺寸推）。 */
+    const projectPoint = (point, view, width, height) => {
+      const radius = Math.min(width, height) * 0.4
+      const focal = 900
+      const camera = radius * 2.4
+      const cy = Math.cos(view.yaw)
+      const sy = Math.sin(view.yaw)
+      const cp = Math.cos(view.pitch)
+      const sp = Math.sin(view.pitch)
+      const x1 = point.x * cy - point.z * sy
+      const z1 = point.x * sy + point.z * cy
+      const y2 = point.y * cp - z1 * sp
+      const z2 = point.y * sp + z1 * cp
+      const scale = (focal / Math.max(60, focal + z2 * radius + camera)) * view.zoom
+      return {
+        id: point.node.id,
+        x: width / 2 + x1 * radius * scale,
+        y: height / 2 + y2 * radius * scale,
+        z: z2,
+        scale,
+      }
+    }
+
+    /** 把某个节点转到正对镜头需要的 yaw/pitch。 */
+    const flyAngles = (point) => ({
+      yaw: Math.atan2(point.x, point.z),
+      pitch: Math.atan2(-point.y, -Math.hypot(point.x, point.z)),
+    })
+
     function Card({ group, draft, changed, onToggle, filter = '', openSignal = 0, registerRef, alwaysOpen = false }) {
       const [open, setOpen] = React.useState(() => {
         try {
@@ -409,60 +496,8 @@ window.__ModuleLoader__.load({
         void load()
       }, [load])
 
-      // 标签聚类：每个节点归到它最「大众」的标签下，标签按人数占纬度带；
-      // 带内再按环排开（人太多就分几环），同一件事的页就挨在一起，孤立点落在自己的带上。
-      const positions = React.useMemo(() => {
-        const nodes = graph?.nodes ?? []
-        if (nodes.length === 0) return []
-        const tagCount = new Map()
-        for (const node of nodes) {
-          for (const tag of node.tags ?? []) tagCount.set(tag, (tagCount.get(tag) ?? 0) + 1)
-        }
-        const bandOf = (node) => {
-          let best = null
-          let bestCount = 0
-          for (const tag of node.tags ?? []) {
-            const count = tagCount.get(tag) ?? 0
-            if (count > bestCount || (count === bestCount && best !== null && tag < best)) {
-              best = tag
-              bestCount = count
-            }
-          }
-          return best ?? `subject:${node.subject ?? 'self'}`
-        }
-        const bands = new Map()
-        for (const node of nodes) {
-          const key = bandOf(node)
-          if (!bands.has(key)) bands.set(key, [])
-          bands.get(key).push(node)
-        }
-        const ordered = [...bands.entries()].sort((a, b) => {
-          if (b[1].length !== a[1].length) return b[1].length - a[1].length
-          return a[0].localeCompare(b[0])
-        })
-        const gap = 0.06
-        const usable = Math.max(0.2, 2 - gap * Math.max(0, ordered.length - 1))
-        const result = []
-        let cursor = 1
-        ordered.forEach(([key, members], bandIndex) => {
-          const height = (members.length / nodes.length) * usable
-          const center = cursor - height / 2
-          cursor -= height + gap
-          members.sort((a, b) => String(a.id).localeCompare(String(b.id)))
-          const perRow = 12
-          const rows = Math.max(1, Math.ceil(members.length / perRow))
-          for (let row = 0; row < rows; row += 1) {
-            const slice = members.slice(row * perRow, (row + 1) * perRow)
-            const y = rows === 1 ? center : center + ((row + 0.5) / rows - 0.5) * height
-            const ring = Math.sqrt(Math.max(0.02, 1 - y * y))
-            slice.forEach((node, index) => {
-              const angle = (index / Math.max(1, slice.length)) * Math.PI * 2 + row * 0.7 + bandIndex * 0.9
-              result.push({ node, band: key, x: Math.cos(angle) * ring, y, z: Math.sin(angle) * ring })
-            })
-          }
-        })
-        return result
-      }, [graph])
+      // 标签聚类：每个节点归到它最「大众」的标签下（实现在 layoutNodes，纯函数好测）
+      const positions = React.useMemo(() => layoutNodes(graph?.nodes ?? []), [graph])
 
       const matches = React.useMemo(() => {
         const needle = query.trim().toLowerCase()
@@ -491,27 +526,7 @@ window.__ModuleLoader__.load({
         ctx.clearRect(0, 0, width, height)
         const ink = getComputedStyle(canvas).color || '#888'
         const view = viewRef.current
-        const radius = Math.min(width, height) * 0.4
-        const focal = 900
-        const camera = radius * 2.4
-        const cy = Math.cos(view.yaw)
-        const sy = Math.sin(view.yaw)
-        const cp = Math.cos(view.pitch)
-        const sp = Math.sin(view.pitch)
-        const project = (point) => {
-          const x1 = point.x * cy - point.z * sy
-          const z1 = point.x * sy + point.z * cy
-          const y2 = point.y * cp - z1 * sp
-          const z2 = point.y * sp + z1 * cp
-          const scale = (focal / Math.max(60, focal + z2 * radius + camera)) * view.zoom
-          return {
-            id: point.node.id,
-            x: width / 2 + x1 * radius * scale,
-            y: height / 2 + y2 * radius * scale,
-            z: z2,
-            scale,
-          }
-        }
+        const project = (point) => projectPoint(point, view, width, height)
         const projected = positions.map(project)
         const byId = new Map(projected.map((point) => [point.id, point]))
         pointsRef.current = projected
@@ -656,11 +671,9 @@ window.__ModuleLoader__.load({
       const flyTo = (id) => {
         const item = positions.find((point) => point.node.id === id)
         if (!item) return
-        const targetYaw = Math.atan2(item.x, item.z)
-        const ring = Math.hypot(item.x, item.z)
-        const targetPitch = Math.atan2(-item.y, -ring)
+        const target = flyAngles(item)
         const view = viewRef.current
-        let delta = targetYaw - view.yaw
+        let delta = target.yaw - view.yaw
         delta = Math.atan2(Math.sin(delta), Math.cos(delta))
         const fromYaw = view.yaw
         const fromPitch = view.pitch
@@ -671,7 +684,7 @@ window.__ModuleLoader__.load({
           const t = Math.min(1, (now - started) / 480)
           const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
           view.yaw = fromYaw + delta * ease
-          view.pitch = fromPitch + (targetPitch - fromPitch) * ease
+          view.pitch = fromPitch + (target.pitch - fromPitch) * ease
           draw()
           if (t < 1) requestAnimationFrame(step)
         }
@@ -846,6 +859,139 @@ window.__ModuleLoader__.load({
           ),
         )
           : null,
+      )
+    }
+
+    const USER_MODEL_API = '/dsh-leinao/user-model'
+
+    /**
+     * 用户模型：把「关于老大」的东西摊开看、能删。
+     * 删除走宿主的事件接口（不是直接改文件），所以 journal 里留痕、重放能重建。
+     */
+    function UserModelCard() {
+      const [model, setModel] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const [busy, setBusy] = React.useState('')
+      const [armed, setArmed] = React.useState(false)
+
+      const load = React.useCallback(async () => {
+        try {
+          const response = await fetch(USER_MODEL_API)
+          const body = await response.json().catch(() => null)
+          if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+          setModel(body)
+          setError('')
+        } catch (err) {
+          setError(String(err?.message ?? err))
+        }
+      }, [])
+
+      React.useEffect(() => {
+        void load()
+      }, [load])
+
+      const post = async (payload, mark) => {
+        setBusy(mark)
+        setError('')
+        try {
+          const response = await fetch(USER_MODEL_API, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          const body = await response.json().catch(() => null)
+          if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+          setModel(body)
+          setArmed(false)
+        } catch (err) {
+          setError(String(err?.message ?? err))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const counts = model?.counts ?? {}
+      const observations = model?.observations ?? []
+      const pages = model?.pages ?? []
+      const smallButton = (label, onClick, disabled) => h(
+        'button',
+        {
+          type: 'button',
+          onClick,
+          disabled,
+          style: { ...S.chip, cursor: disabled ? 'default' : 'pointer', fontSize: 11, background: 'transparent', color: 'inherit', font: 'inherit' },
+        },
+        label,
+      )
+
+      return h(
+        'div',
+        { style: S.card },
+        h(
+          'div',
+          { style: S.cardHeader },
+          h(
+            'span',
+            { style: S.cardText },
+            h('span', { style: S.cardTitle }, '用户模型'),
+            h('span', { style: S.cardHint }, '关于用户的观察与记忆页；删掉的会留一条事件，重放能重建。'),
+          ),
+          h('span', { style: S.cardCount }, `${counts.observations ?? 0} 条观察 · ${counts.pages ?? 0} 条页`),
+        ),
+        h(
+          'div',
+          { style: { ...S.body } },
+          h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 14px' } },
+            h(
+              'div',
+              { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
+              smallButton('刷新', () => void load(), Boolean(busy)),
+              armed
+                ? smallButton('再点一次清空观察', () => void post({ action: 'clear-observations' }, 'clear'), Boolean(busy))
+                : smallButton('清空观察', () => setArmed(true), observations.length === 0 || Boolean(busy)),
+              armed ? smallButton('取消', () => setArmed(false), false) : null,
+            ),
+
+            observations.length
+              ? observations.map((item) => h(
+                  'div',
+                  { key: item.key, style: { display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' } },
+                  h(
+                    'span',
+                    { style: S.rowHint, flex: '1 1 auto', minWidth: 0 },
+                    h('strong', null, item.key),
+                    `：${item.value}`,
+                    h('span', { style: { opacity: 0.65 } }, ` · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}`),
+                    item.evidence ? h('span', { style: { opacity: 0.55 } }, ` · 原话「${item.evidence}」`) : null,
+                  ),
+                  smallButton('删', () => void post({ action: 'drop-observation', key: item.key }, `drop-${item.key}`), Boolean(busy)),
+                ))
+              : h('span', { style: S.rowHint }, '还没有观察。用 persona_observe 记一条，必须带原话。'),
+
+            pages.length
+              ? h(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
+                  pages.map((page) => h(
+                    'div',
+                    { key: page.path, style: { display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' } },
+                    h(
+                      'span',
+                      { style: S.rowHint, flex: '1 1 auto', minWidth: 0 },
+                      h('strong', null, page.title),
+                      h('span', { style: S.path }, ` ${page.path}`),
+                      page.gist ? ` —— ${page.gist}` : null,
+                    ),
+                    smallButton('删', () => void post({ action: 'forget-page', path: page.path }, `page-${page.path}`), Boolean(busy)),
+                  )),
+                )
+              : null,
+
+            error ? h('p', { style: S.error }, `用户模型读不出来：${error}`) : null,
+          ),
+        ),
       )
     }
 
@@ -1096,6 +1242,8 @@ window.__ModuleLoader__.load({
               }))
           : null,
 
+        !loading && !loadError ? h(UserModelCard) : null,
+
         !loading && !loadError ? h(GraphCard) : null,
 
         !loading && !loadError ? h(HealthCard, { health: snapshot?.status?.health }) : null,
@@ -1314,6 +1462,9 @@ window.__ModuleLoader__.load({
       }
     }
 
-    return { name, inject, apply }
+    // 纯逻辑给单测用；运行时形态不变（客户端拿不到本地模块，只能这样暴露）
+    const __test = { rowMatches, layoutNodes, projectPoint, flyAngles }
+
+    return { name, inject, apply, __test }
   },
 })

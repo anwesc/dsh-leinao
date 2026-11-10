@@ -16,6 +16,7 @@ import {
   installSessionApi,
   installGraphApi,
   installSettingsApi,
+  installUserModelApi,
   mergeIntoFile,
   pickEditable,
   restartKeys,
@@ -331,4 +332,68 @@ test('settings: 图谱接口只读、同源、现算现返回', async () => {
   const cross = fakeResponse()
   await route.handler(fakeRequest({ headers: { origin: 'https://evil.example', host: '127.0.0.1:1' } }), cross)
   assert.equal(cross.status, 403)
+})
+
+test('用户模型接口：读、删观察、清空、忘页与错误处理', async () => {
+  let route = null
+  const ctx = {
+    inject(services, callback) {
+      assert.deepEqual(services, ['webServer'])
+      callback({
+        webServer: {
+          register(value) {
+            route = value
+            return () => {
+              route = null
+            }
+          },
+        },
+        effect(fn) {
+          fn()
+        },
+      })
+    },
+  }
+  const calls = []
+  const model = {
+    observations: [{ key: '作息', value: '常熬夜', confidence: 0.8 }],
+    pages: [],
+    counts: { observations: 1, confident: 1, pages: 0 },
+  }
+  assert.equal(installUserModelApi(ctx, {
+    getModel: () => model,
+    dropObservation: (key) => calls.push(['drop', key]),
+    clearObservations: () => calls.push(['clear']),
+    forgetPage: (path) => calls.push(['forget', path]),
+  }), true)
+  assert.equal(route?.path, '/dsh-leinao/user-model')
+
+  const call = async (options) => {
+    const response = fakeResponse()
+    await route.handler(fakeRequest(options), response)
+    return { status: response.status, body: response.json() }
+  }
+
+  const read = await call({ headers: { host: '127.0.0.1:1' } })
+  assert.equal(read.status, 200)
+  assert.equal(read.body.ok, true)
+  assert.equal(read.body.counts.observations, 1)
+
+  const dropped = await call({ method: 'POST', body: { action: 'drop-observation', key: '作息' } })
+  assert.equal(dropped.status, 200)
+  assert.deepEqual(calls.at(-1), ['drop', '作息'])
+
+  await call({ method: 'POST', body: { action: 'clear-observations' } })
+  assert.deepEqual(calls.at(-1), ['clear'])
+
+  await call({ method: 'POST', body: { action: 'forget-page', path: 'people/laoda' } })
+  assert.deepEqual(calls.at(-1), ['forget', 'people/laoda'])
+
+  assert.equal((await call({ method: 'POST', body: { action: 'forget-page' } })).status, 400)
+  assert.equal((await call({ method: 'POST', body: { action: 'drop-observation' } })).status, 400)
+  assert.equal((await call({ method: 'POST', body: { action: 'nope' } })).status, 400)
+  assert.equal((await call({
+    method: 'GET',
+    headers: { host: '127.0.0.1:1', origin: 'http://evil.example' },
+  })).status, 403)
 })

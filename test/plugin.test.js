@@ -306,3 +306,26 @@ test('plugin: seed 只有一次，reset 要 confirm', async (t) => {
   assert.match(await reset.execute({ scope: 'all', confirm: true }), /已重置/)
   assert.match(ctx.prompt.text(), /persona_seed/)
 })
+
+test('plugin: 增量应用与全量重放结果一致（写事件不用整份重放）', async (t) => {
+  const { dir, ctx } = setup(t)
+  const tool = (name) => ctx.registered.find((item) => item.name === name)
+
+  await tool('persona_seed').execute({ name: '阿鱼', user_call: '老大' })
+  await tool('persona_remember').execute({ title: '约定', content: '周六一起打游戏', path: 'events/plan', tags: '约定' })
+  await tool('persona_remember').execute({ subject: 'user', title: '作息', content: '常熬夜', path: 'people/late' })
+  await tool('persona_observe').execute({ key: '作息', value: '常熬夜写代码', evidence: '又两点睡' })
+  await tool('persona_bond').execute({ action: 'up', why: '配合得好' })
+  await wait(30)
+
+  const { events } = scanEvents(dir)
+  const { state: replay } = fold(events)
+
+  // 插件内存里的状态（增量 apply）应该和从头重放一模一样
+  assert.match(ctx.prompt.text(), /阿鱼/)
+  const cached = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
+  assert.equal(cached.meta.journal.count, events.length)
+  assert.deepEqual(cached.state.pages, replay.pages)
+  assert.deepEqual(cached.state.observations, replay.observations)
+  assert.equal(cached.state.bond.level, replay.bond.level)
+})

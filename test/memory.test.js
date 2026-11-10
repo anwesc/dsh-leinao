@@ -357,3 +357,17 @@ test('tools: persona_observe 必须带原话证据，同 key 覆盖', async () =
   await verified.tool('persona_seed').execute({ name: '阿鱼' })
   assert.match(await verified.tool('persona_state').execute(), /1 条观察/)
 })
+
+test('tools: 已存在的页不能靠 subject 换边', async () => {
+  const { tool, state } = rig()
+  await tool('persona_remember').execute({ title: '我的事', content: '自己的记忆', path: 'self/mine' })
+  const out = await tool('persona_remember').execute({
+    subject: 'user',
+    title: '我的事',
+    content: '想挪成观察',
+    path: 'self/mine',
+  })
+  assert.match(out, /不能直接换边/)
+  assert.equal(state().pages['self/mine'].subject, 'self')
+  assert.equal(state().pages['self/mine'].content, '自己的记忆')
+})

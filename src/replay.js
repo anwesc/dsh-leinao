@@ -100,6 +100,17 @@ export function applyEvent(state, event) {
       }
       break
     }
+    case 'observation-drop': {
+      const key = normalizeObservationKey(event.key)
+      if (!key || !state.observations?.[key]) return false
+      delete state.observations[key]
+      break
+    }
+    case 'observation-clear': {
+      if (!state.observations || Object.keys(state.observations).length === 0) return false
+      state.observations = {}
+      break
+    }
     case 'affect': {
       const signal = event.signal
       if (!signal || ![signal.v, signal.e, signal.t].every((x) => Number.isFinite(x))) return false
@@ -296,6 +307,7 @@ export function applyEvent(state, event) {
         state.traits = defaultTraits()
         state.mood = { ...baseline(state.traits), at: atMs, mode: 'focused' }
         state.pages = {}
+        state.observations = {}
         state.milestones = []
         state.bond = defaultBond(null)
         state.shifts = []

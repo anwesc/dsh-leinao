@@ -180,6 +180,8 @@ export class ProactiveNudge {
     this.agent = agent
     this.readConfig = options.readConfig ?? (() => PROACTIVE)
     this.getState = options.getState ?? (() => undefined)
+    this.getMemory = options.getMemory ?? (() => ({}))
+    this.userName = options.userName ?? (() => '')
     this.record = options.record
     this.isEnabled = options.isEnabled
     this.agents = options.agents
@@ -249,7 +251,7 @@ export class ProactiveNudge {
     if (now < this.nextAt) return
 
     const state = this.getState()
-    const page = pickRecallPage(state, now, config)
+    const page = pickRecallPage(state, now, { ...config, memory: this.getMemory?.() ?? {} })
     if (!page) return
 
     const claim = claimProactiveLock({
@@ -263,7 +265,8 @@ export class ProactiveNudge {
       return
     }
 
-    this.agent.followup(buildRecallMessage(page, state?.profile))
+    const profile = state?.profile ?? {}
+    this.agent.followup(buildRecallMessage(page, { ...profile, userCall: profile.userCall || this.userName?.() }))
     this.sent += 1
     this.nextAt = now + randomIntervalMs(config.minMinutes, config.maxMinutes)
     try {

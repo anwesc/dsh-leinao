@@ -194,3 +194,40 @@ test('fold 的 applyEvent 不认识的事件返回 false', () => {
   assert.equal(applyEvent(state, { kind: 'wat', at: '2026-11-01T10:00:00+08:00' }), false)
   assert.equal(applyEvent(state, null), false)
 })
+
+test('称呼可配置：seed 注入与 PROFILE 用 userName，而不是写死的「老大」', () => {
+  const born = seedInjection()
+  assert.match(born, /这是第一次和老大相处/)
+  assert.match(seedInjection({ userName: '阿明' }), /这是第一次和阿明相处/)
+
+  const { state } = fold([
+    makeEvent('seed', 'dev-a', { name: '大肥鱼' }, at('2026-11-01T10:00:00+08:00')),
+  ])
+  const profile = renderProfile(state, at('2026-11-01T11:00:00+08:00').getTime(), { userName: '阿明' })
+  assert.match(profile, /## 关于阿明/)
+  assert.doesNotMatch(profile, /## 关于老大/)
+
+  const seed = fold([
+    makeEvent('seed', 'dev-a', { name: '大肥鱼', userCall: '老板' }, at('2026-11-01T10:00:00+08:00')),
+  ])
+  assert.match(
+    renderProfile(seed.state, at('2026-11-01T11:00:00+08:00').getTime(), { userName: '阿明' }),
+    /## 关于老板/,
+    'seed 里记下的称呼优先于配置',
+  )
+})
+
+test('reset all 把观察一起清掉，回到出生前', () => {
+  const { state } = fold([
+    makeEvent('seed', 'dev-a', { name: '阿鱼' }, at('2026-11-01T10:00:00+08:00')),
+    makeEvent(
+      'observation',
+      'dev-a',
+      { key: '作息', value: '常熬夜', evidence: '又两点睡', confidence: 0.7 },
+      at('2026-11-01T10:01:00+08:00'),
+    ),
+    makeEvent('reset', 'dev-a', { scope: 'all' }, at('2026-11-01T10:02:00+08:00')),
+  ])
+  assert.deepEqual(Object.keys(state.observations), [])
+  assert.equal(state.phase, 'seed')
+})

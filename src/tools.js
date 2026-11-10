@@ -10,8 +10,9 @@ import { AXES, AXIS_LABELS, SHIFT, checkShift, clamp01, isAxis } from './traits.
 import { bondLabel, checkBond, riftLevelLabel } from './bond.js'
 import { baseline, decay, moodLabel } from './mood.js'
 import { describeTraits } from './prompt.js'
-import { isVisible, memoryStats, normalizeLinks, normalizeTags, searchPages } from './memory.js'
+import { isVisible, memoryStats, normalizeLinks, normalizeTags, searchPages, subjectOf } from './memory.js'
 import { OBSERVATION, normalizeObservationKey, observationStats } from './observations.js'
+import { userCall } from './call.js'
 
 const SHIFT_MAX = SHIFT.maxDelta
 
@@ -98,7 +99,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
         `关系：${bondLabel(bond.level)}${bond.rift ? `（有未解的疙瘩：${bond.rift.gist ?? bond.rift.why ?? '没说清'}，程度${riftLevelLabel(bond.rift.heat)}）` : ''}`,
         `心情：${moodLine(state, Date.now(), rt.getConfig?.()?.mood?.halfLifeHours)}`,
         `相处：${state.stats.userTurns} 轮 · 亲密度 ${fmt(state.intimacy)} · ${state.stats.events} 条事件`,
-        `记忆：${selfMemory.visible} 条在册${selfMemory.folded ? `（${selfMemory.folded} 条整理页）` : ''}${selfMemory.isolated ? `，${selfMemory.isolated} 条还没有互链` : ''}${userMemory.visible || observed.count ? ` · 关于老大 ${userMemory.visible} 条页 / ${observed.count} 条观察` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
+        `记忆：${selfMemory.visible} 条在册${selfMemory.folded ? `（${selfMemory.folded} 条整理页）` : ''}${selfMemory.isolated ? `，${selfMemory.isolated} 条还没有互链` : ''}${userMemory.visible || observed.count ? ` · 关于${userCall(state, rt.userName?.())} ${userMemory.visible} 条页 / ${observed.count} 条观察` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
         state.shifts?.length ? `突变：${state.shifts.length} 次` : null,
         pinned.length ? `固定：${pinned.join('、')}` : null,
       ].filter(Boolean)
@@ -112,7 +113,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
     parameters: {
       name: { type: 'string', required: true, description: '用户给你起的名字' },
       gender: { type: 'string', description: '性别或性别气质（可空）' },
-      user_call: { type: 'string', description: '你称呼用户的方式，如"老大"（可空）' },
+      user_call: { type: 'string', description: '你称呼用户的方式，如"老板"（可空）' },
     },
     output: TEXT_OUTPUT,
     execute(args) {
@@ -207,14 +208,14 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_remember',
-    description: '把一件值得长期记住的事写进记忆。subject=self 是「我自己的记忆」（关于老大、约定、重要经历、我自己的判断）；subject=user 是「对老大的观察」（他的习惯、偏好、最近状态，不是他的自我描述）。同一 path 再写就是更新。用 links 把它和相关旧记忆连起来，以后一条被想起，另一条更容易跟着出现。日常寒暄不用记。',
+    description: '把一件值得长期记住的事写进记忆。subject=self 是「我自己的记忆」（关于对方、约定、重要经历、我自己的判断）；subject=user 是「对用户的观察」（他的习惯、偏好、最近状态，不是他的自我描述）。同一 path 再写就是更新。用 links 把它和相关旧记忆连起来，以后一条被想起，另一条更容易跟着出现。日常寒暄不用记。',
     parameters: {
-      subject: { type: 'string', description: 'self（默认，我自己的记忆）/ user（对老大的观察）' },
+      subject: { type: 'string', description: 'self（默认，我自己的记忆）/ user（对用户的观察）' },
       title: { type: 'string', required: true, description: '一句话标题，≤40 字' },
       content: { type: 'string', required: true, description: '正文；以后每轮只看得到索引里的一行，细节要靠这里' },
       path: { type: 'string', description: '稳定 id：小写字母/数字/斜杠，如 people/laoda、events/job-change；不填自动生成 notes/xxx' },
       gist: { type: 'string', description: '索引里显示的一句话，≤40 字；不填取正文首行' },
-      tags: { type: 'string', description: '逗号分隔的标签，如 老大,工作；折叠时按第一个标签归类' },
+      tags: { type: 'string', description: '逗号分隔的标签，如 用户,工作；折叠时按第一个标签归类' },
       links: { type: 'string', description: '相关的记忆 path，逗号分隔，最多 5 条；不填保留原有关系，填空字符串则清空' },
       salience: { type: 'number', description: '1 永远记得 / 2 正常（默认）/ 3 容易忘' },
     },
@@ -232,6 +233,10 @@ export function registerPersonaTools(ctx, defineTool, rt) {
         return Promise.resolve('没有记：path 只能用 小写字母/数字/斜杠/下划线/短横，如 people/laoda。')
       }
       const existed = Boolean(state.pages[path])
+      if (existed && subjectOf(state.pages[path]) !== subject) {
+        const side = subjectOf(state.pages[path]) === 'user' ? '对用户的观察' : '人格记忆'
+        return Promise.resolve(`没有记：${path} 已经是${side}，不能直接换边。要记另一边请换一个 path。`)
+      }
       const level = Number(args?.salience)
       const salience = [1, 2, 3].includes(level) ? level : 2
       const tags = normalizeTags(args?.tags)
@@ -254,14 +259,14 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const related = links.length ? `，关联 ${links.length} 条` : ''
       const miss = dropped > 0 ? `其中 ${dropped} 个 path 没有对应的记忆，已忽略。` : ''
       return Promise.resolve(
-        `${existed ? '更新了' : '记下了'}「${title}」（${path}${subject === 'user' ? '，关于老大' : ''}${salience === 1 ? '，永远记得' : ''}${related}）。${miss}`,
+        `${existed ? '更新了' : '记下了'}「${title}」（${path}${subject === 'user' ? `，关于${userCall(state, rt.userName?.())}` : ''}${salience === 1 ? '，永远记得' : ''}${related}）。${miss}`,
       )
     },
   }))
 
   tools.push(defineTool({
     name: 'persona_observe',
-    description: `记一条「对老大的观察」进用户模型：他反复出现的习惯、偏好、作息、情绪模式。这不是人格记忆，不进我自己的叙事，也不该写成"他就是这样的人"。必须带 evidence——用户原话里逐字抄的一小段；最近对话里找不到原话就不要记，宁可这次空着。同一个 key 再记会覆盖旧值（key 要稳定，如「作息」「口味」「沟通习惯」）。`,
+    description: `记一条「对用户的观察」进用户模型：他反复出现的习惯、偏好、作息、情绪模式。这不是人格记忆，不进我自己的叙事，也不该写成"他就是这样的人"。必须带 evidence——用户原话里逐字抄的一小段；最近对话里找不到原话就不要记，宁可这次空着。同一个 key 再记会覆盖旧值（key 要稳定，如「作息」「口味」「沟通习惯」）。`,
     parameters: {
       key: { type: 'string', required: true, description: `稳定的短标签，≤${OBSERVATION.maxKeyChars} 字，如 作息、口味、沟通习惯` },
       value: { type: 'string', required: true, description: `一句话观察，≤${OBSERVATION.maxValueChars} 字` },
@@ -292,7 +297,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
     name: 'persona_recall',
     description: '按关键词或 path 查记忆全文。命中会记一次召回，让这条以后更容易被想起来。subject 不填两边都查。',
     parameters: {
-      subject: { type: 'string', description: '限定一边：self（我的记忆）/ user（关于老大）' },
+      subject: { type: 'string', description: '限定一边：self（我的记忆）/ user（关于用户）' },
       query: { type: 'string', description: '关键词，空格分隔，全部命中才算；和 path 二选一' },
       path: { type: 'string', description: '直接取某一条，优先于 query' },
       limit: { type: 'number', description: '最多几条，默认 3、上限 5' },
@@ -363,7 +368,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_forget',
-    description: '忘掉一条记忆：从索引和检索里移除，原文仍留在事件流里可复盘。只有老大明确说「忘掉 / 别再提」时才用。',
+    description: '忘掉一条记忆：从索引和检索里移除，原文仍留在事件流里可复盘。只有用户明确说「忘掉 / 别再提」时才用。',
     parameters: {
       path: { type: 'string', required: true, description: '要忘掉的 path' },
       why: { type: 'string', description: '为什么忘，一句话' },

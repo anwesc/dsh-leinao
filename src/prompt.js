@@ -10,6 +10,7 @@
 import { AXES, AXIS_LABELS } from './traits.js'
 import { BAND_INSTRUCTIONS, band, baseline, decay } from './mood.js'
 import { bondLabel, riftLevelLabel } from './bond.js'
+import { userCall } from './call.js'
 
 const ORDER = 130
 
@@ -25,10 +26,10 @@ export function describeTraits(traits) {
   return AXES.map((axis) => `${AXIS_LABELS[axis]}${level(traits?.[axis]?.v ?? 0.5)}`).join(' ')
 }
 
-export function seedInjection() {
+export function seedInjection(options = {}) {
   return [
     '【人格】你还没有名字。',
-    '这是第一次和老大相处：自然一点，别搞仪式感，也别自称"AI 助手人格模块"。',
+    `这是第一次和${userCall(null, options.userName)}相处：自然一点，别搞仪式感，也别自称"AI 助手人格模块"。`,
     '找机会问一句：希望怎么称呼你、你该怎么称呼他。拿到回答后调用 persona_seed 落地（name 必填，gender 和 user_call 可空），之后就不用再问了。',
     '在那之前，用"我"说话即可，不要给自己编名字。',
   ].join('\n')
@@ -41,7 +42,7 @@ export function seedInjection() {
  * @returns {string|null} 需要注入的文本；null 表示这次不注入
  */
 export function buildInjection(state, nowMs = Date.now(), options = {}) {
-  if (!state || state.phase === 'seed') return seedInjection()
+  if (!state || state.phase === 'seed') return seedInjection({ userName: options.userName })
 
   const mood = decay(state.mood, baseline(state.traits), nowMs, options.mood?.halfLifeHours)
   const b = band(mood)

@@ -20,10 +20,13 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { DEFAULT_CONFIG, loadConfig } from './src/config.js'
 import { ensureDeviceId } from './src/device.js'
 import { appendEvent, makeEvent } from './src/journal.js'
-import { ensureDirs, loadState, personaPaths, saveState, writeFileAtomic } from './src/store.js'
+import { applyEvent } from './src/replay.js'
+import { ensureDirs, journalFingerprint, loadState, personaPaths, saveState, writeFileAtomic } from './src/store.js'
 import { renderProfile, writeProfile, writeUserModel } from './src/render.js'
 import { buildInjection, buildUserInjection } from './src/prompt.js'
 import { observationLines, observationStats } from './src/observations.js'
+import { buildUserModel } from './src/userModel.js'
+import { userCall } from './src/call.js'
 import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
 import { detectMend } from './src/bond.js'
@@ -32,7 +35,7 @@ import { buildGraph } from './src/graph.js'
 import { buildHealth } from './src/health.js'
 import { ActivityTracker, ProactiveNudge } from './src/proactive.js'
 import { SessionGate } from './src/sessions.js'
-import { installGraphApi, installSessionApi, installSettingsApi } from './src/settings.js'
+import { installGraphApi, installSessionApi, installSettingsApi, installUserModelApi } from './src/settings.js'
 import { SHIFT } from './src/traits.js'
 import { commitAll, createBackoff, ensureRepo, hasRemote, sync } from './src/git.js'
 
@@ -132,6 +135,8 @@ export function apply(ctx, inlineConfig = {}) {
   }
 
   let current = loadState(dataDir)
+  /** journal 指纹：没变就不再扫；自己写事件时同步刷新 */
+  let currentFp = journalFingerprint(dataDir)
   const evidence = createEvidenceCheck()
   const backoff = createBackoff()
   /** 会话级开关：某个会话可以单独关掉主动开口（全局仍开） */
@@ -163,9 +168,15 @@ export function apply(ctx, inlineConfig = {}) {
   let reminderTurn = null
   let reminderCount = 0
 
-  /** 状态缓存失效就重放；命中缓存时只扫一遍 journal（数据量小，够用） */
+  /**
+   * 读状态：先比 journal 指纹，没变就直接用内存里的；
+   * 变了才重新扫 journal（外部 git pull / 别的进程写过）。
+   */
   function refresh() {
+    const fp = journalFingerprint(dataDir)
+    if (current && fp === currentFp) return current
     current = loadState(dataDir)
+    currentFp = fp
     return current
   }
 
@@ -173,7 +184,7 @@ export function apply(ctx, inlineConfig = {}) {
     try {
       const scan = current.scan
       saveState(dataDir, current.state, scan)
-      writeProfile(dataDir, current.state, Date.now(), { mood: cfg.mood })
+      writeProfile(dataDir, current.state, Date.now(), { mood: cfg.mood, userName: cfg.userName })
     } catch (error) {
       log.warn?.(`[leinao] 写入 state/PROFILE 失败：${error.message}`)
     }
@@ -241,8 +252,19 @@ export function apply(ctx, inlineConfig = {}) {
   function record(draft) {
     const { kind, when, ...payload } = draft
     const event = makeEvent(kind, deviceId, payload, when instanceof Date ? when : new Date())
+    // 先把状态追到最新，再写：这样新事件能直接 apply，不用为一条事件重放整份 journal
+    const base = refresh()
     appendEvent(dataDir, deviceId, event)
-    current = loadState(dataDir, { forceRebuild: true })
+    const last = base.scan.events[base.scan.events.length - 1]
+    const ordered = !last || event.at > last.at || (event.at === last.at && event.id > last.id)
+    if (ordered && applyEvent(base.state, event)) {
+      base.scan.events.push(event)
+      current = base
+    } else {
+      // 乱序（backdate 的 when）或应用失败：老老实实全量重放
+      current = loadState(dataDir, { forceRebuild: true })
+    }
+    currentFp = journalFingerprint(dataDir)
     persistSoon()
     if (cfg.debug) log.debug?.(`[leinao] ${kind} ${JSON.stringify(payload).slice(0, 200)}`)
     return event
@@ -300,6 +322,7 @@ export function apply(ctx, inlineConfig = {}) {
           memory: index.text,
           reminder: foldReminder(state, now),
           mood: cfg.mood,
+          userName: cfg.userName,
         })
         const cap = Number(cfg.prompt.maxChars) || 0
         return cap > 0 && text.length > cap ? `${text.slice(0, Math.max(1, cap - 1))}…` : text
@@ -322,7 +345,7 @@ export function apply(ctx, inlineConfig = {}) {
         const index = memoryIndex(state, Date.now(), lastCue, {
           ...cfg.memory,
           subject: 'user',
-          header: '【关于老大】你观察到的事（不是他自己说的）：',
+          header: `【关于${userCall(state, cfg.userName)}】你观察到的事（不是他自己说的）：`,
         })
         const text = buildUserInjection(state, {
           memory: [observationLines(state).join('\n'), index.text].filter(Boolean).join('\n'),
@@ -354,6 +377,8 @@ export function apply(ctx, inlineConfig = {}) {
           const nudge = new ProactiveNudge(agent, {
             readConfig: () => cfg.proactive,
             getState: () => refresh().state,
+            getMemory: () => cfg.memory,
+            userName: () => cfg.userName,
             record,
             agents,
             tracker: trackerLocal,
@@ -462,7 +487,7 @@ export function apply(ctx, inlineConfig = {}) {
         events: current.state.stats?.events ?? 0,
         deviceId,
         dataDir,
-        memories: stats.visible,
+        memories: memoryStats(current.state, 'self').visible,
         userMemories: memoryStats(current.state, 'user').visible,
         observations: observationStats(current.state).count,
         folded: stats.folded,
@@ -483,6 +508,14 @@ export function apply(ctx, inlineConfig = {}) {
 
   installGraphApi(ctx, {
     getGraph: () => buildGraph(refresh().state, Date.now(), { memory: cfg.memory }),
+    log,
+  })
+
+  installUserModelApi(ctx, {
+    getModel: () => buildUserModel(refresh().state),
+    dropObservation: (key) => record({ kind: 'observation-drop', key }),
+    clearObservations: () => record({ kind: 'observation-clear' }),
+    forgetPage: (path) => record({ kind: 'forget', path, why: '用户模型里删除' }),
     log,
   })
 
@@ -552,15 +585,16 @@ export function apply(ctx, inlineConfig = {}) {
         record,
         verifyEvidence: evidence.verify,
         getConfig: () => cfg,
-        render: (state) => renderProfile(state, Date.now(), { mood: cfg.mood }),
+        render: (state) => renderProfile(state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
         writeExport: (text) => {
           const file = join(paths.view, 'EXPORT.md')
           writeFileAtomic(file, text)
           return file
         },
-        writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood }),
+        writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
+        userName: () => cfg.userName,
       })
-      log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')
+      log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_observe / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')
     } catch (error) {
       log.warn?.(`[leinao] 工具注册失败：${error.message}`)
     }

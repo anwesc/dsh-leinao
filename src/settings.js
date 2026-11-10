@@ -18,6 +18,7 @@ export const EDITABLE = {
   enabled: { type: 'boolean', restart: true },
   dataDir: { type: 'string', maxLength: 400, restart: true },
   deviceId: { type: 'string', maxLength: 80, restart: true },
+  userName: { type: 'string', maxLength: 40 },
   debug: { type: 'boolean' },
   'journal.git': { type: 'boolean', restart: true },
   'journal.push': { type: 'boolean' },
@@ -55,6 +56,7 @@ export const EDITABLE = {
 const CONFIG_PATH = '/dsh-leinao/config'
 const SESSION_PATH = '/dsh-leinao/session'
 const GRAPH_PATH = '/dsh-leinao/graph'
+const USER_MODEL_PATH = '/dsh-leinao/user-model'
 const BODY_LIMIT_BYTES = 64 * 1024
 const isPlain = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -391,6 +393,66 @@ export function installGraphApi(ctx, { getGraph, log } = {}) {
       }
     }
     if (typeof host.effect === 'function') host.effect(mount, 'leinao: graph api')
+    else mount()
+  })
+  return true
+}
+
+
+/**
+ * 注册用户模型接口：`GET /dsh-leinao/user-model` 读观察与用户页，
+ * `POST` 用 drop-observation / clear-observations / forget-page 删除。
+ * 删除也走事件（observation-drop / observation-clear / forget），
+ * 所以「删了」在 journal 里有痕，重放能重建——不是偷偷改文件。
+ */
+export function installUserModelApi(ctx, { getModel, dropObservation, clearObservations, forgetPage, log } = {}) {
+  if (typeof ctx?.inject !== 'function' || typeof getModel !== 'function') return false
+  const handle = async (request, response) => {
+    if (!isSameOrigin(request)) return sendJson(response, 403, { error: '来源不被信任（只允许本机）' })
+    const method = String(request?.method ?? 'GET').toUpperCase()
+    try {
+      if (method === 'GET') return sendJson(response, 200, { ok: true, ...getModel() })
+      if (method === 'POST') {
+        const body = JSON.parse((await readBody(request)) || '{}')
+        const action = String(body?.action ?? '')
+        if (action === 'drop-observation') {
+          const key = typeof body?.key === 'string' ? body.key.trim() : ''
+          if (!key) return sendJson(response, 400, { error: '缺少 key' })
+          dropObservation?.(key)
+        } else if (action === 'clear-observations') {
+          clearObservations?.()
+        } else if (action === 'forget-page') {
+          const path = typeof body?.path === 'string' ? body.path.trim() : ''
+          if (!path) return sendJson(response, 400, { error: '缺少 path' })
+          forgetPage?.(path)
+        } else {
+          return sendJson(response, 400, { error: `不认识的操作：${JSON.stringify(action)}` })
+        }
+        return sendJson(response, 200, { ok: true, ...getModel() })
+      }
+      return sendJson(response, 405, { error: '不支持的方法' })
+    } catch (error) {
+      log?.warn?.(`[leinao] 用户模型请求失败：${error.message}`)
+      return sendJson(response, 400, { error: String(error?.message ?? error) })
+    }
+  }
+  ctx.inject(['webServer'], (host) => {
+    const server = host?.webServer
+    if (!server || typeof server.register !== 'function') {
+      log?.warn?.('[leinao] webServer 不可用，用户模型管理没挂上')
+      return
+    }
+    const mount = () => {
+      const dispose = server.register({ kind: 'exact', path: USER_MODEL_PATH, handler: handle })
+      return () => {
+        try {
+          dispose?.()
+        } catch {
+          /* 宿主卸载时路由可能已经没了 */
+        }
+      }
+    }
+    if (typeof host.effect === 'function') host.effect(mount, 'leinao: user model api')
     else mount()
   })
   return true

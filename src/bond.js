@@ -53,8 +53,8 @@ export const MEND = {
 
 /** 给 PROFILE 看的缓和理由 */
 export const MEND_LABELS = {
-  'apology:user': '老大先道的歉',
-  'warmth:user': '老大给了台阶',
+  'apology:user': '对方先道的歉',
+  'warmth:user': '对方给了台阶',
   'apology:self': '我认了错',
 }
 

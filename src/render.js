@@ -6,6 +6,7 @@ import { AXES, AXIS_LABELS } from './traits.js'
 import { band, baseline, decay } from './mood.js'
 import { bondLabel, riftLevelLabel } from './bond.js'
 import { isVisible, memoryStats, subjectOf } from './memory.js'
+import { userCall } from './call.js'
 import { observationList, observationStats } from './observations.js'
 import { writeFileAtomic } from './store.js'
 import { personaPaths } from './store.js'
@@ -111,7 +112,8 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
 
   const userModel = memoryStats(state, 'user')
   const observed = observationStats(state)
-  lines.push('## 关于老大', '')
+  const called = userCall(state, options.userName)
+  lines.push(`## 关于${called}`, '')
   lines.push(
     `- 观察 **${observed.count}** 条（较确定 ${observed.confident} 条） · 记忆页 ${userModel.visible} 条（单独一份：\`view/USER.md\`）`,
   )
@@ -139,14 +141,14 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
  * 用户模型单独一份：可读、可删、可直接拷走。
  * 只收 subject=user 的页；人格记忆一条都不混进来。
  */
-export function renderUserModel(state, nowMs = Date.now()) {
+export function renderUserModel(state, nowMs = Date.now(), options = {}) {
   const pages = Object.values(state?.pages ?? {})
     .filter((page) => isVisible(page) && subjectOf(page) === 'user')
     .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
   const stats = memoryStats(state, 'user')
   const observed = observationList(state)
   const lines = []
-  lines.push('# 关于老大（用户模型）', '')
+  lines.push(`# 关于${userCall(state, options.userName)}（用户模型）`, '')
   lines.push('> 类脑从对话里攒下的观察，可以单独拿走。')
   lines.push('> 观察不是他的自我描述；删掉之后重放 journal 仍会重新生成。')
   lines.push(`> 生成于 ${fmtTime(localIso(new Date(nowMs)))} · 勿手改`, '')
@@ -178,9 +180,9 @@ export function renderUserModel(state, nowMs = Date.now()) {
   return lines.join('\n')
 }
 
-export function writeUserModel(dataDir, state, nowMs = Date.now()) {
+export function writeUserModel(dataDir, state, nowMs = Date.now(), options = {}) {
   const paths = personaPaths(dataDir)
-  const text = renderUserModel(state, nowMs)
+  const text = renderUserModel(state, nowMs, options)
   writeFileAtomic(paths.userModel, text)
   return text
 }
@@ -189,6 +191,6 @@ export function writeProfile(dataDir, state, nowMs = Date.now(), options = {}) {
   const paths = personaPaths(dataDir)
   const text = renderProfile(state, nowMs, options)
   writeFileAtomic(paths.profile, text)
-  writeUserModel(dataDir, state, nowMs)
+  writeUserModel(dataDir, state, nowMs, options)
   return text
 }

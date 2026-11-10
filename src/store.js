@@ -3,7 +3,7 @@
  * 读的时候先看缓存戳（journal 条数 + 最后一条 id）对不对得上；对不上就重放。
  * 写一律 tmp → rename，断电最多丢一次，不会留半截 JSON。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { localIso, scanEvents } from './journal.js'
@@ -107,12 +107,35 @@ export function saveState(dataDir, state, scan) {
   return payload
 }
 
-/** 供 git 层判断"journal 有没有变" */
-export function journalMtime(dataDir) {
-  const dir = join(dataDir, 'journal')
+/**
+ * journal 的廉价指纹：目录里每个 jsonl 的 名字 + 大小 + mtime。
+ * 用来判断"外部有没有写过"（git pull、别的进程），比逐行扫描便宜得多；
+ * 自己 append 之后也会刷新它，避免下一轮又全量扫一遍。
+ */
+export function journalFingerprint(dataDir) {
+  const root = journalDir(dataDir)
+  const parts = []
   try {
-    return existsSync(dir) ? statSync(dir).mtimeMs : 0
+    if (!existsSync(root)) return ''
+    for (const device of readdirSync(root, { withFileTypes: true })) {
+      if (!device.isDirectory() || device.name.startsWith('.')) continue
+      const dir = join(root, device.name)
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue
+        try {
+          const info = statSync(join(dir, entry.name))
+          parts.push(`${device.name}/${entry.name}:${info.size}:${info.mtimeMs}`)
+        } catch {
+          // 并发删除：忽略
+        }
+      }
+    }
   } catch {
-    return 0
+    return ''
   }
+  return parts.sort().join('|')
+}
+
+function journalDir(dataDir) {
+  return join(dataDir, 'journal')
 }
