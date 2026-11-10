@@ -55,6 +55,22 @@ export function normalizeTags(input) {
   return out.slice(0, 8)
 }
 
+/** 关联页：path 形式，最多 5 条；非法/重复的丢掉 */
+export function normalizeLinks(input) {
+  const raw = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(/[,，、\s]+/)
+      : []
+  const out = []
+  for (const item of raw) {
+    const link = String(item ?? '').trim().toLowerCase()
+    if (!link || !/^[a-z0-9][a-z0-9/_-]{0,79}$/.test(link)) continue
+    if (!out.includes(link)) out.push(link)
+  }
+  return out.slice(0, 5)
+}
+
 export function truncate(text, max) {
   const value = String(text ?? '').replace(/\s+/g, ' ').trim()
   if (!max || value.length <= max) return value
@@ -105,7 +121,8 @@ function lineFor(page, cfg) {
 
 /**
  * 挑这一轮要注入的记忆目录。
- * @returns {{text:string, selected:Array<{path:string, via:'fixed'|'strong'|'hit'}>, lines:string[]}}
+ * 命中页的邻居也算「沾边」：分数减半补进来，但强度低于 hideBelow 的仍然不复活。
+ * @returns {{text:string, selected:Array<{path:string, via:'fixed'|'strong'|'hit', linked?:boolean}>, lines:string[]}}
  */
 export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
   const cfg = { ...MEMORY, ...options }
@@ -115,7 +132,18 @@ export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
     if (!isVisible(page)) continue
     const strength = strengthOf(page, nowMs, cfg)
     if (page.pinned || page.salience === 1) fixed.push({ page, strength, hit: 0 })
-    else rest.push({ page, strength, hit: matchScore(page, cue) })
+    else rest.push({ page, strength, hit: matchScore(page, cue), linked: false })
+  }
+
+  const baseHits = rest.filter((item) => item.hit > 0 && item.strength >= cfg.hideBelow)
+  const byPath = new Map(rest.map((item) => [item.page.path, item]))
+  for (const item of baseHits) {
+    for (const link of item.page.links ?? []) {
+      const target = byPath.get(link)
+      if (!target || target.hit > 0 || target.strength < cfg.hideBelow) continue
+      target.hit = Math.max(1, Math.floor(item.hit / 2))
+      target.linked = true
+    }
   }
 
   const strong = rest
@@ -138,10 +166,12 @@ export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
     if (used + line.length > budget) break
     lines.push(line)
     used += line.length + 1
-    selected.push({
+    const entry = {
       path: item.page.path,
       via: item.page.pinned || item.page.salience === 1 ? 'fixed' : item.hit > 0 ? 'hit' : 'strong',
-    })
+    }
+    if (item.linked) entry.linked = true
+    selected.push(entry)
   }
   if (!lines.length) return { text: '', selected: [], lines: [] }
   return { text: `${header}\n${lines.join('\n')}`, selected, lines }
@@ -174,7 +204,7 @@ export function foldCandidates(state, nowMs = Date.now(), options = {}) {
     .sort((a, b) => b.paths.length - a.paths.length)
 }
 
-/** 按关键词搜（空格分隔，全部命中才要），标签/路径精确命中加权 */
+/** 按关键词搜（空格分隔，全部命中才要），标签/路径精确命中加权；命中页的邻居补半档 */
 export function searchPages(state, query, limit = 3, options = {}) {
   const terms = String(query ?? '')
     .toLowerCase()
@@ -200,16 +230,42 @@ export function searchPages(state, query, limit = 3, options = {}) {
     score += strengthOf(page, Date.now(), options) * 2
     hits.push({ page, score })
   }
-  return hits.sort((a, b) => b.score - a.score).slice(0, limit).map((hit) => hit.page)
+  hits.sort((a, b) => b.score - a.score)
+
+  // 一跳：直接命中的页，它关联的页也拉进来，分数减半（只从最靠前的几条扩散）
+  const seen = new Set(hits.map((hit) => hit.page.path))
+  const linked = []
+  for (const hit of hits.slice(0, 3)) {
+    for (const path of hit.page.links ?? []) {
+      if (seen.has(path)) continue
+      const page = state?.pages?.[path]
+      if (!isVisible(page)) continue
+      seen.add(path)
+      linked.push({ page, score: hit.score * 0.5 })
+    }
+  }
+
+  return [...hits, ...linked]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((hit) => hit.page)
 }
 
 export function memoryStats(state) {
   const pages = Object.values(state?.pages ?? {})
+  const visible = pages.filter(isVisible)
+  const outgoing = visible.filter((page) => (page.links ?? []).length > 0)
+  const incoming = new Set()
+  for (const page of visible) {
+    for (const link of page.links ?? []) incoming.add(link)
+  }
   return {
     total: pages.length,
-    visible: pages.filter(isVisible).length,
+    visible: visible.length,
     folded: pages.filter((page) => page.kind === 'fold').length,
     superseded: pages.filter((page) => page.supersededBy).length,
     forgotten: pages.filter((page) => page.forgottenAt).length,
+    linked: outgoing.length,
+    isolated: visible.filter((page) => !(page.links ?? []).length && !incoming.has(page.path)).length,
   }
 }

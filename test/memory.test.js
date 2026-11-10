@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 
 import { makeEvent } from '../src/journal.js'
 import { emptyState, fold } from '../src/replay.js'
-import { MEMORY, foldCandidates, memoryIndex, strengthOf } from '../src/memory.js'
+import { MEMORY, foldCandidates, memoryIndex, memoryStats, searchPages, strengthOf } from '../src/memory.js'
 import { buildInjection } from '../src/prompt.js'
 import { registerPersonaTools } from '../src/tools.js'
 
@@ -170,4 +170,75 @@ test('tools: 非法 path 不写、state 带记忆统计', async () => {
   await tool('persona_seed').execute({ name: '阿鱼' })
   const text = await tool('persona_state').execute()
   assert.match(text, /记忆：1 条在册/)
+})
+
+test('replay: page 的 links 归一化、更新不带 links 时保留；fold 继承邻居', () => {
+  const at2 = (day) => at(`2026-10-0${day}T10:00:00+08:00`)
+  const { state } = fold([
+    makeEvent('page', 'dev', { path: 'people/laoda', title: '老大', content: '程序员' }, at2(1)),
+    makeEvent('page', 'dev', { path: 'events/job', title: '换工作', content: '去了新公司', links: 'People/Laoda, events/perm' }, at2(2)),
+    makeEvent('page', 'dev', { path: 'events/job', content: '去了新公司，做后端' }, at2(3)),
+    makeEvent('page', 'dev', { path: 'people/x', title: 'X', content: 'c', links: ['people/laoda', 'people/y'] }, at2(3)),
+    makeEvent('page', 'dev', { path: 'people/y', title: 'Y', content: 'c', links: ['events/job'] }, at2(3)),
+    makeEvent('fold', 'dev', { into: 'digest/x', from: ['people/x', 'people/y'], title: 'X 合集' }, at2(4)),
+  ])
+  assert.deepEqual(state.pages['events/job'].links, ['people/laoda', 'events/perm'])
+  // 被折叠页的链接继承过来；指向被折叠页自己的那条丢掉
+  assert.deepEqual(state.pages['digest/x'].links, ['people/laoda', 'events/job'])
+  assert.equal(state.pages['people/y'].supersededBy, 'digest/x')
+})
+
+test('memory: 命中页的邻居补半档，强度太低的邻居不复活', () => {
+  const now = Date.parse('2026-11-01T00:00:00Z')
+  const state = {
+    pages: {
+      'work/job': page({
+        path: 'work/job',
+        title: '换工作',
+        tags: ['工作'],
+        updatedAt: '2026-11-01T00:00:00Z',
+        links: ['people/laoda', 'old/x'],
+      }),
+      'people/laoda': page({ path: 'people/laoda', title: '老大', tags: ['人'], updatedAt: '2026-10-11T00:00:00Z' }),
+      'old/x': page({ path: 'old/x', title: '很久以前', tags: ['旧'], updatedAt: '2025-01-01T00:00:00Z' }),
+    },
+  }
+  const index = memoryIndex(state, now, '工作')
+  const paths = index.selected.map((item) => item.path)
+  assert.ok(paths.includes('work/job'))
+  assert.ok(paths.includes('people/laoda'))
+  assert.ok(index.selected.find((item) => item.path === 'people/laoda').linked)
+  assert.ok(!paths.includes('old/x'))
+
+  const found = searchPages(state, '换工作', 3).map((page) => page.path)
+  assert.equal(found[0], 'work/job')
+  assert.ok(found.includes('people/laoda'))
+})
+
+test('memory: 统计有互链的页和孤立页', () => {
+  const state = { pages: { a: page({ path: 'a', links: ['b'] }), b: page({ path: 'b' }), c: page({ path: 'c' }) } }
+  const stats = memoryStats(state)
+  assert.equal(stats.visible, 3)
+  assert.equal(stats.linked, 1)
+  assert.equal(stats.isolated, 1)
+})
+
+test('tools: remember 的 links 只收存在且可见的页，不填时保留原关系', async () => {
+  const { tool, state } = rig()
+  await tool('persona_remember').execute({ title: '老大', content: '程序员', path: 'people/laoda' })
+  const saved = await tool('persona_remember').execute({
+    title: '换工作',
+    content: '去了新公司',
+    path: 'events/job',
+    links: 'people/laoda,missing/page',
+  })
+  assert.match(saved, /关联 1 条/)
+  assert.match(saved, /已忽略/)
+  assert.deepEqual(state().pages['events/job'].links, ['people/laoda'])
+
+  await tool('persona_remember').execute({ title: '换工作', content: '更新一下', path: 'events/job' })
+  assert.deepEqual(state().pages['events/job'].links, ['people/laoda'])
+
+  const recalled = await tool('persona_recall').execute({ path: 'events/job' })
+  assert.match(recalled, /相关：people\/laoda/)
 })

@@ -10,7 +10,7 @@ import { AXES, AXIS_LABELS, SHIFT, checkShift, isAxis } from './traits.js'
 import { bondLabel, checkBond, riftLevelLabel } from './bond.js'
 import { baseline, decay, moodLabel } from './mood.js'
 import { describeTraits } from './prompt.js'
-import { memoryStats, normalizeTags, searchPages } from './memory.js'
+import { isVisible, memoryStats, normalizeLinks, normalizeTags, searchPages } from './memory.js'
 
 const SHIFT_MAX = SHIFT.maxDelta
 
@@ -33,7 +33,7 @@ function firstLine(value, max = 40) {
   return cleanText(line, max)
 }
 
-function formatPage(page) {
+function formatPage(page, state) {
   const head = `【${page.path}】${page.title}${page.supersededBy ? `（已整理进 ${page.supersededBy}）` : ''}`
   const body = cleanText(page.content, 700)
   const meta = [
@@ -41,7 +41,9 @@ function formatPage(page) {
     (page.tags ?? []).join('、'),
     page.salience === 1 ? '永远记得' : null,
   ].filter(Boolean).join(' · ')
-  return [head, body, meta ? `（${meta}）` : ''].filter(Boolean).join('\n')
+  const links = (page.links ?? []).filter((path) => !state || isVisible(state.pages?.[path]))
+  const related = links.length ? `相关：${links.join('、')}` : ''
+  return [head, body, meta ? `（${meta}）` : '', related].filter(Boolean).join('\n')
 }
 
 /** 折叠页的 path：digest/<tag 或标题的 ascii 化>，重名加序号 */
@@ -92,7 +94,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
         `关系：${bondLabel(bond.level)}${bond.rift ? `（有未解的疙瘩：${bond.rift.gist ?? bond.rift.why ?? '没说清'}，程度${riftLevelLabel(bond.rift.heat)}）` : ''}`,
         `心情：${moodLine(state, Date.now(), rt.getConfig?.()?.mood?.halfLifeHours)}`,
         `相处：${state.stats.userTurns} 轮 · 亲密度 ${fmt(state.intimacy)} · ${state.stats.events} 条事件`,
-        `记忆：${memory.visible} 条在册${memory.folded ? `（${memory.folded} 条整理页）` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
+        `记忆：${memory.visible} 条在册${memory.folded ? `（${memory.folded} 条整理页）` : ''}${memory.isolated ? `，${memory.isolated} 条还没有互链` : ''}${memory.forgotten ? `，忘了 ${memory.forgotten} 条` : ''}`,
         state.shifts?.length ? `突变：${state.shifts.length} 次` : null,
         pinned.length ? `固定：${pinned.join('、')}` : null,
       ].filter(Boolean)
@@ -201,13 +203,14 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_remember',
-    description: '把一件值得长期记住的事写进记忆（关于老大、约定、重要经历、你自己的判断）。同一 path 再写就是更新。日常寒暄不用记。',
+    description: '把一件值得长期记住的事写进记忆（关于老大、约定、重要经历、你自己的判断）。同一 path 再写就是更新。用 links 把它和相关旧记忆连起来（比如「换工作」连到「老大」），以后一条被想起，另一条更容易跟着出现。日常寒暄不用记。',
     parameters: {
       title: { type: 'string', required: true, description: '一句话标题，≤40 字' },
       content: { type: 'string', required: true, description: '正文；以后每轮只看得到索引里的一行，细节要靠这里' },
       path: { type: 'string', description: '稳定 id：小写字母/数字/斜杠，如 people/laoda、events/job-change；不填自动生成 notes/xxx' },
       gist: { type: 'string', description: '索引里显示的一句话，≤40 字；不填取正文首行' },
       tags: { type: 'string', description: '逗号分隔的标签，如 老大,工作；折叠时按第一个标签归类' },
+      links: { type: 'string', description: '相关的记忆 path，逗号分隔，最多 5 条；不填保留原有关系，填空字符串则清空' },
       salience: { type: 'number', description: '1 永远记得 / 2 正常（默认）/ 3 容易忘' },
     },
     output: TEXT_OUTPUT,
@@ -226,7 +229,10 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const level = Number(args?.salience)
       const salience = [1, 2, 3].includes(level) ? level : 2
       const tags = normalizeTags(args?.tags)
-      rt.record({
+      const wanted = normalizeLinks(args?.links)
+      const links = wanted.filter((link) => link !== path && isVisible(state.pages[link]))
+      const dropped = wanted.length - links.length
+      const draft = {
         kind: 'page',
         path,
         title,
@@ -235,9 +241,13 @@ export function registerPersonaTools(ctx, defineTool, rt) {
         tags,
         salience,
         source: 'tool',
-      })
+      }
+      if (args?.links !== undefined && args?.links !== null) draft.links = links
+      rt.record(draft)
+      const related = links.length ? `，关联 ${links.length} 条` : ''
+      const miss = dropped > 0 ? `其中 ${dropped} 个 path 没有对应的记忆，已忽略。` : ''
       return Promise.resolve(
-        `${existed ? '更新了' : '记下了'}「${title}」（${path}${salience === 1 ? '，永远记得' : ''}）。`,
+        `${existed ? '更新了' : '记下了'}「${title}」（${path}${salience === 1 ? '，永远记得' : ''}${related}）。${miss}`,
       )
     },
   }))
@@ -259,14 +269,14 @@ export function registerPersonaTools(ctx, defineTool, rt) {
         const page = state.pages[path]
         if (!page || page.forgottenAt) return Promise.resolve(`没有「${path}」这条记忆。`)
         rt.record({ kind: 'recall', path, via: 'tool' })
-        return Promise.resolve(formatPage(page))
+        return Promise.resolve(formatPage(page, state))
       }
       const query = String(args?.query ?? '').trim()
       if (!query) return Promise.resolve('给个 query（关键词）或 path。')
       const pages = searchPages(state, query, limit)
       if (!pages.length) return Promise.resolve(`没找到和「${query}」有关的记忆。`)
       for (const page of pages) rt.record({ kind: 'recall', path: page.path, via: 'tool' })
-      return Promise.resolve(pages.map(formatPage).join('\n\n'))
+      return Promise.resolve(pages.map((page) => formatPage(page, state)).join('\n\n'))
     },
   }))
 

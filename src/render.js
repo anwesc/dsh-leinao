@@ -5,6 +5,7 @@
 import { AXES, AXIS_LABELS } from './traits.js'
 import { band, baseline, decay } from './mood.js'
 import { bondLabel, riftLevelLabel } from './bond.js'
+import { isVisible, memoryStats } from './memory.js'
 import { writeFileAtomic } from './store.js'
 import { personaPaths } from './store.js'
 import { localIso } from './journal.js'
@@ -86,6 +87,23 @@ export function renderProfile(state, nowMs = Date.now(), options = {}) {
     lines.push('## 里程碑', '')
     for (const m of state.milestones.slice(-8)) {
       lines.push(`- ${fmtTime(m.at)} · ${milestoneText(m)}`)
+    }
+    lines.push('')
+  }
+
+  const memory = memoryStats(state)
+  if (memory.visible) {
+    lines.push('## 记忆', '')
+    lines.push(
+      `- 在册 **${memory.visible}** 条${memory.folded ? `（整理页 ${memory.folded}）` : ''} · 有互链 ${memory.linked} 条 · 孤立 ${memory.isolated} 条`,
+    )
+    const recent = Object.values(state.pages)
+      .filter(isVisible)
+      .sort((a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? ''))
+      .slice(0, 5)
+    for (const page of recent) {
+      const links = page.links ?? []
+      lines.push(`- ${page.title}（\`${page.path}\`）${links.length ? ` → ${links.map((link) => `\`${link}\``).join('、')}` : ''}`)
     }
     lines.push('')
   }

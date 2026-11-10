@@ -9,7 +9,7 @@
 import { applySignal, baseline, MOOD_DEFAULTS } from './mood.js'
 import { clamp01, defaultTraits, growthResistance, crossedSteps, isAxis } from './traits.js'
 import { BOND, BOND_ACTIONS, MEND, MEND_LABELS, bondOffset, clampHeat, defaultBond } from './bond.js'
-import { normalizeTags } from './memory.js'
+import { isVisible, normalizeLinks, normalizeTags } from './memory.js'
 
 export const STATE_VERSION = 2
 
@@ -189,6 +189,7 @@ export function applyEvent(state, event) {
         supersededBy: prev.supersededBy ?? null,
         sources: prev.sources ?? [],
         kind: prev.kind ?? 'page',
+        links: event.links === undefined ? (prev.links ?? []) : normalizeLinks(event.links),
         forgottenAt: null,
         forgottenWhy: null,
       }
@@ -207,15 +208,20 @@ export function applyEvent(state, event) {
       const from = Array.isArray(event.from) ? event.from.filter((path) => typeof path === 'string' && path) : []
       if (!into || !from.length) return false
       const sources = []
+      const inherited = []
       for (const path of from) {
         const page = state.pages[path]
         if (!page || page.forgottenAt || path === into) continue
+        inherited.push(...(page.links ?? []))
         page.supersededBy = into
         sources.push(path)
       }
       if (!sources.length) return false
       const prev = state.pages[into] ?? {}
       const merged = [...new Set([...(prev.sources ?? []), ...sources])]
+      const links = normalizeLinks([...(prev.links ?? []), ...inherited]).filter(
+        (link) => link !== into && isVisible(state.pages[link]),
+      )
       state.pages[into] = {
         ...prev,
         path: into,
@@ -239,6 +245,7 @@ export function applyEvent(state, event) {
         forgottenWhy: null,
         kind: 'fold',
         sources: merged,
+        links,
       }
       break
     }
