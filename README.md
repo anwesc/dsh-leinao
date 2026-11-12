@@ -37,7 +37,13 @@
 npm install dsh-plugin-leinao
 ```
 
-v0.1.0 还没发到 npm，也还没建远程仓库，先直接指向本地目录：
+v0.1.0 还没发到 npm，先从 GitHub 装：
+
+```bash
+npm install "github:anwesc/dsh-leinao"
+```
+
+本地开发时也可以直接指向目录：
 
 ```bash
 npm install "D:/01_Code/github/dsh-leinao"

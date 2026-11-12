@@ -872,7 +872,9 @@ window.__ModuleLoader__.load({
       const [model, setModel] = React.useState(null)
       const [error, setError] = React.useState('')
       const [busy, setBusy] = React.useState('')
-      const [armed, setArmed] = React.useState(false)
+      const [open, setOpen] = React.useState(false)
+      const [query, setQuery] = React.useState('')
+      const [pending, setPending] = React.useState('')
 
       const load = React.useCallback(async () => {
         try {
@@ -902,7 +904,7 @@ window.__ModuleLoader__.load({
           const body = await response.json().catch(() => null)
           if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
           setModel(body)
-          setArmed(false)
+          setPending('')
         } catch (err) {
           setError(String(err?.message ?? err))
         } finally {
@@ -913,6 +915,11 @@ window.__ModuleLoader__.load({
       const counts = model?.counts ?? {}
       const observations = model?.observations ?? []
       const pages = model?.pages ?? []
+      const needle = query.trim().toLowerCase()
+      const shown = needle
+        ? observations.filter((item) => `${item.key} ${item.value} ${item.evidence ?? ''}`.toLowerCase().includes(needle))
+        : observations
+
       const smallButton = (label, onClick, disabled) => h(
         'button',
         {
@@ -924,21 +931,36 @@ window.__ModuleLoader__.load({
         label,
       )
 
+      const sectionLabel = (text, total) => h(
+        'div',
+        { style: { display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 10, fontSize: 11.5, opacity: 0.72 } },
+        h('span', null, text),
+        h('span', { style: { ...S.cardCount, fontSize: 10 } }, String(total)),
+      )
+
+      // 单条删除改成两段：先「删」、再「确认删」，避免误点直接丢。
+      const actions = (id, run) => (
+        pending === id
+          ? [smallButton('确认删', run, Boolean(busy)), smallButton('取消', () => setPending(''))]
+          : [smallButton('删', () => setPending(id), Boolean(busy))]
+      )
+
       return h(
         'div',
         { style: S.card },
         h(
-          'div',
-          { style: S.cardHeader },
+          'button',
+          { type: 'button', style: S.cardHeader, onClick: () => setOpen((value) => !value) },
           h(
             'span',
             { style: S.cardText },
             h('span', { style: S.cardTitle }, '用户模型'),
-            h('span', { style: S.cardHint }, '关于用户的观察与记忆页；删掉的会留一条事件，重放能重建。'),
+            h('span', { style: S.cardHint }, '它眼里的你：观察必须带原话，删掉的留一条事件，重放能重建。'),
           ),
           h('span', { style: S.cardCount }, `${counts.observations ?? 0} 条观察 · ${counts.pages ?? 0} 条页`),
+          h('span', { style: { ...S.caret, ...(open ? S.caretOpen : null) } }, '▶'),
         ),
-        h(
+        open ? h(
           'div',
           { style: { ...S.body } },
           h(
@@ -948,14 +970,22 @@ window.__ModuleLoader__.load({
               'div',
               { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
               smallButton('刷新', () => void load(), Boolean(busy)),
-              armed
-                ? smallButton('再点一次清空观察', () => void post({ action: 'clear-observations' }, 'clear'), Boolean(busy))
-                : smallButton('清空观察', () => setArmed(true), observations.length === 0 || Boolean(busy)),
-              armed ? smallButton('取消', () => setArmed(false), false) : null,
+              pending === 'clear'
+                ? smallButton('再点一次清空', () => void post({ action: 'clear-observations' }, 'clear'), Boolean(busy))
+                : smallButton('清空观察', () => setPending('clear'), observations.length === 0 || Boolean(busy)),
+              pending === 'clear' ? smallButton('取消', () => setPending(''), false) : null,
+              observations.length > 6 ? h('input', {
+                type: 'search',
+                value: query,
+                placeholder: '搜观察',
+                onChange: (event) => setQuery(event.target.value),
+                style: { ...S.input, flex: '1 1 120px', minWidth: 0, textAlign: 'left', padding: '4px 8px', fontSize: 12 },
+              }) : null,
             ),
 
-            observations.length
-              ? observations.map((item) => h(
+            sectionLabel('观察', observations.length),
+            shown.length
+              ? shown.map((item) => h(
                   'div',
                   { key: item.key, style: { display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' } },
                   h(
@@ -963,35 +993,35 @@ window.__ModuleLoader__.load({
                     { style: S.rowHint, flex: '1 1 auto', minWidth: 0 },
                     h('strong', null, item.key),
                     `：${item.value}`,
-                    h('span', { style: { opacity: 0.65 } }, ` · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}`),
-                    item.evidence ? h('span', { style: { opacity: 0.55 } }, ` · 原话「${item.evidence}」`) : null,
+                    Number(item.confidence ?? 0) < 0.5
+                      ? h('span', { style: { ...S.chip, fontSize: 10, padding: '1px 6px', marginLeft: 6, opacity: 0.8 } }, '不太确定')
+                      : null,
+                    h('span', { style: { opacity: 0.55 } }, ` · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}`),
+                    h('span', { style: { display: 'block', opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: item.evidence ?? '' }, item.evidence ? `原话「${item.evidence}」` : '（没有原话）'),
                   ),
-                  smallButton('删', () => void post({ action: 'drop-observation', key: item.key }, `drop-${item.key}`), Boolean(busy)),
+                  ...actions(`obs:${item.key}`, () => void post({ action: 'drop-observation', key: item.key }, `drop-${item.key}`)),
                 ))
-              : h('span', { style: S.rowHint }, '还没有观察。用 persona_observe 记一条，必须带原话。'),
+              : h('span', { style: S.rowHint }, observations.length ? '没有匹配的观察。' : '还没有观察。聊天里说过的话，可以让它用 persona_observe 记下来（必须带原话）。'),
 
+            pages.length ? sectionLabel('记忆页', pages.length) : null,
             pages.length
-              ? h(
+              ? pages.map((page) => h(
                   'div',
-                  { style: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 } },
-                  pages.map((page) => h(
-                    'div',
-                    { key: page.path, style: { display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' } },
-                    h(
-                      'span',
-                      { style: S.rowHint, flex: '1 1 auto', minWidth: 0 },
-                      h('strong', null, page.title),
-                      h('span', { style: S.path }, ` ${page.path}`),
-                      page.gist ? ` —— ${page.gist}` : null,
-                    ),
-                    smallButton('删', () => void post({ action: 'forget-page', path: page.path }, `page-${page.path}`), Boolean(busy)),
-                  )),
-                )
+                  { key: page.path, style: { display: 'flex', gap: 8, alignItems: 'baseline', justifyContent: 'space-between' } },
+                  h(
+                    'span',
+                    { style: S.rowHint, flex: '1 1 auto', minWidth: 0 },
+                    h('strong', null, page.title),
+                    h('span', { style: S.path }, ` ${page.path}`),
+                    page.gist ? ` —— ${page.gist}` : null,
+                  ),
+                  ...actions(`page:${page.path}`, () => void post({ action: 'forget-page', path: page.path }, `page-${page.path}`)),
+                ))
               : null,
 
             error ? h('p', { style: S.error }, `用户模型读不出来：${error}`) : null,
           ),
-        ),
+        ) : null,
       )
     }
 
@@ -1164,17 +1194,19 @@ window.__ModuleLoader__.load({
           ? wide && !needle
             ? h(
                 'div',
-                { style: { display: 'flex', gap: 12, alignItems: 'flex-start' } },
+                { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
                 h(
                   'nav',
                   {
                     style: {
-                      flex: '0 0 132px',
                       position: 'sticky',
                       top: 8,
+                      zIndex: 1,
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: 3,
+                      flexWrap: 'wrap',
+                      gap: 6,
+                      paddingBottom: 4,
+                      background: SURFACE,
                     },
                   },
                   ...visibleGroups.map((group) => {
@@ -1187,13 +1219,12 @@ window.__ModuleLoader__.load({
                         type: 'button',
                         onClick: () => setActive(group.id),
                         style: {
-                          display: 'flex',
+                          display: 'inline-flex',
                           alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 6,
-                          padding: '6px 8px',
-                          borderRadius: 8,
-                          border: `1px solid ${isActive ? ACCENT : 'transparent'}`,
+                          gap: 5,
+                          padding: '5px 10px',
+                          borderRadius: 999,
+                          border: `1px solid ${isActive ? ACCENT : BORDER}`,
                           background: isActive ? 'rgba(76,110,245,.10)' : 'transparent',
                           color: 'inherit',
                           font: 'inherit',

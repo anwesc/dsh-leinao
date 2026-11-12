@@ -1,6 +1,9 @@
 {
   "name": "dsh-plugin-leinao",
   "version": "0.1.0",
+  "repository": { "type": "git", "url": "git+https://github.com/anwesc/dsh-leinao.git" },
+  "homepage": "https://github.com/anwesc/dsh-leinao#readme",
+  "bugs": { "url": "https://github.com/anwesc/dsh-leinao/issues" },
   "description": "类脑（Leinao）：事件溯源的人格插件——性格随长期交互缓慢变化，关系有台阶也有疙瘩，心情每轮浮动并影响表达。",
   "license": "MIT",
   "type": "module",
