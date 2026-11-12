@@ -52,14 +52,16 @@ export function buildHealth(state, nowMs = Date.now(), options = {}) {
 
   // 1) 索引是不是被塞满了 —— 塞满说明该折叠了，不然每轮都在挤预算。
   const index = memoryIndex(state, nowMs, '', memory)
-  const indexFull = index.lines.length >= memory.indexMaxLines
+  // 行数刚好用满不算问题；有「同样够格」的页被挤掉才值得提醒。
+  const indexHidden = Math.max(0, (index.candidates ?? index.lines.length) - index.lines.length)
   checks.push({
     id: 'index',
     label: '索引预算',
-    ok: !indexFull,
-    detail: indexFull
-      ? `索引 ${index.lines.length}/${memory.indexMaxLines} 行已满，记得折叠或提高上限。`
-      : `索引 ${index.lines.length}/${memory.indexMaxLines} 行，还有余量。`,
+    ok: indexHidden === 0,
+    detail:
+      indexHidden === 0
+        ? `索引 ${index.lines.length}/${memory.indexMaxLines} 行，够格的都在里面。`
+        : `索引 ${index.lines.length}/${memory.indexMaxLines} 行已满，还有 ${indexHidden} 条够格的在排队：折叠旧的，或把上限调高。`,
   })
 
   // 2) 关系：孤点太多说明记得散，召回时带不出上下文。

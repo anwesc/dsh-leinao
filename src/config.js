@@ -44,8 +44,8 @@ export const DEFAULT_CONFIG = {
     /** 强度减半天数 */
     halfLifeDays: 21,
     /** 索引：最多几行、总字数（每轮注入的记忆目录） */
-    indexMaxLines: 3,
-    indexMaxChars: 300,
+    indexMaxLines: 5,
+    indexMaxChars: 400,
     /** 强度 ≥ 此值常驻索引；低于 hideBelow 只能显式召回 */
     strongThreshold: 0.5,
     hideBelow: 0.2,

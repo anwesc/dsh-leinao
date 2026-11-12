@@ -19,8 +19,8 @@ export const MEMORY = {
   recallBonus: 0.15,
   recallBonusCap: 0.45,
   /** 索引：最多几行、总字数、单行字数 */
-  indexMaxLines: 3,
-  indexMaxChars: 300,
+  indexMaxLines: 5,
+  indexMaxChars: 400,
   lineMaxChars: 68,
   /** 强度 ≥ 此值常驻索引 */
   strongThreshold: 0.5,
@@ -165,7 +165,8 @@ export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
     .sort((a, b) => b.hit - a.hit || b.strength - a.strength)
 
   const chosen = [...fixed, ...strong, ...hits].slice(0, cfg.indexMaxLines)
-  if (!chosen.length) return { text: '', selected: [], lines: [] }
+  const candidates = fixed.length + strong.length + hits.length
+  if (!chosen.length) return { text: '', selected: [], lines: [], candidates }
 
   const header = cfg.header ?? '【记忆】你记得这些事（要细节就调 persona_recall）：'
   const budget = cfg.indexMaxChars - header.length - 1
@@ -184,8 +185,8 @@ export function memoryIndex(state, nowMs = Date.now(), cue = '', options = {}) {
     if (item.linked) entry.linked = true
     selected.push(entry)
   }
-  if (!lines.length) return { text: '', selected: [], lines: [] }
-  return { text: `${header}\n${lines.join('\n')}`, selected, lines }
+  if (!lines.length) return { text: '', selected: [], lines: [], candidates }
+  return { text: `${header}\n${lines.join('\n')}`, selected, lines, candidates }
 }
 
 /**

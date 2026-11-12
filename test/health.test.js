@@ -43,7 +43,7 @@ test('health: 新鲜、互链、索引没满时是健康', () => {
 
 test('health: 索引塞满、全是孤点、都是旧页时分数掉下来', () => {
   const events = []
-  for (const path of ['a', 'b', 'c']) {
+  for (const path of ['a', 'b', 'c', 'd', 'e', 'f']) {
     events.push(makeEvent('page', 'dev', page(path, { salience: 1 }), at('2025-01-01T10:00:00+08:00')))
   }
   for (let index = 0; index < 3; index += 1) {

@@ -98,7 +98,7 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
   "dataDir": "~/.leinao",
   "journal": { "git": true, "push": false, "remote": "" },
   "mood": { "debounceMs": 2000, "halfLifeHours": 6 },
-  "memory": { "indexMaxLines": 3, "foldEveryTurns": 30 }
+  "memory": { "indexMaxLines": 5, "foldEveryTurns": 30 }
 }
 ```
 
@@ -122,8 +122,8 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `prompt.userOrder` | `131` | 用户模型块的位置（紧跟人格块） |
 | `prompt.userMaxChars` | `400` | 用户模型块上限；设 0 等于关掉这一块 |
 | `memory.halfLifeDays` | `21` | 记忆强度半衰期 |
-| `memory.indexMaxLines` | `3` | 每轮注入最多几行记忆摘要 |
-| `memory.indexMaxChars` | `300` | 记忆注入块字数上限 |
+| `memory.indexMaxLines` | `5` | 每轮注入最多几行记忆摘要 |
+| `memory.indexMaxChars` | `400` | 记忆注入块字数上限 |
 | `memory.strongThreshold` | `0.5` | 高于这个强度每轮都在索引里 |
 | `memory.hideBelow` | `0.2` | 低于这个强度退出索引 |
 | `memory.foldAfterDays` | `30` | 多久没召回进折叠候选 |
