@@ -54,6 +54,7 @@ window.__ModuleLoader__.load({
           { key: 'journal.remote', kind: 'text', label: '远程仓库', hint: '留空沿用数据目录里已有的 origin', placeholder: 'https://github.com/you/persona.git' },
           { key: 'journal.commitDebounceMs', kind: 'number', label: '提交防抖', hint: '安静这么久再提交一次', unit: '毫秒', min: 0, max: 120000, step: 500 },
           { key: 'journal.pushDebounceMs', kind: 'number', label: '推送防抖', hint: '连着聊几轮只推一次', unit: '毫秒', min: 0, max: 3600000, step: 5000 },
+          { key: 'journal.recordMessages', kind: 'switch', label: '记录对话内容', hint: '每条消息进 journal，供检索召回；敏感信息会过滤。关掉只留情绪和记忆事件', restart: true },
           { key: 'journal.pullTimeoutMs', kind: 'number', label: '同步超时', hint: 'git 拉取最多等多久', unit: '毫秒', min: 1000, max: 300000, step: 1000 },
         ],
       },
@@ -101,6 +102,22 @@ window.__ModuleLoader__.load({
           { key: 'memory.foldEveryTurns', kind: 'number', label: '提醒间隔', hint: '每多少轮提一次；0 表示不提醒', unit: '轮', min: 0, max: 1000, step: 10 },
           { key: 'memory.foldMaxPrompts', kind: 'number', label: '每次会话上限', hint: '提醒最多提几次，免得烦', unit: '次', min: 0, max: 100, step: 1 },
           { key: 'memory.weakRecallHours', kind: 'number', label: '弱召回冷却', hint: '同一页多久内不重复记召回', unit: '小时', min: 0, max: 720, step: 1 },
+          { key: 'memory.nudgeEnabled', kind: 'switch', label: '写记忆提醒', hint: '你说「以后都这样」这类话时，下一轮轻提一句要不要记' },
+          { key: 'memory.nudgeCooldownMinutes', kind: 'number', label: '提醒冷却', hint: '两次提醒之间至少隔多久', unit: '分钟', min: 0, max: 1440, step: 5 },
+          { key: 'memory.nudgeMaxPerSession', kind: 'number', label: '每次会话上限', hint: '0 表示不限；同类信号本身只提一次', unit: '次', min: 0, max: 50, step: 1 },
+          { key: 'memory.autoObservation', kind: 'switch', label: '自动草稿', hint: '同类话短时间内说两次，自动记一条低置信度观察，可删' },
+        ],
+      },
+      {
+        id: 'recall',
+        title: '对话检索',
+        hint: '把原话也存下来：每轮按你刚说的话，从以前的对话里捞 1–2 条相关片段。',
+        rows: [
+          { key: 'memory.recallEnabled', kind: 'switch', label: '检索历史对话', hint: '按字面从全量对话里找相关片段，挑 1–2 条注入；不是向量检索', restart: true },
+          { key: 'memory.recallMaxLines', kind: 'number', label: '检索条数', hint: '每次最多注入几条相关片段；0 表示不注入', unit: '条', min: 0, max: 6, step: 1 },
+          { key: 'memory.embedding.enabled', kind: 'switch', label: '向量检索', hint: '开启后对话原文会发给下面的 embedding 服务；关掉只用字面检索', restart: true },
+          { key: 'memory.embedding.baseUrl', kind: 'text', label: 'Embedding 地址', hint: 'OpenAI 兼容，例如 https://api.siliconflow.cn/v1 或 http://127.0.0.1:11434/v1', placeholder: 'https://…/v1', restart: true },
+          { key: 'memory.embedding.model', kind: 'text', label: 'Embedding 模型', hint: '如 BAAI/bge-m3；密钥用环境变量 DSH_LEINAO_EMBED_KEY', placeholder: 'BAAI/bge-m3', restart: true },
         ],
       },
       {
@@ -997,6 +1014,12 @@ window.__ModuleLoader__.load({
                       ? h('span', { style: { ...S.chip, fontSize: 10, padding: '1px 6px', marginLeft: 6, opacity: 0.8 } }, '不太确定')
                       : null,
                     h('span', { style: { opacity: 0.55 } }, ` · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}`),
+                    item.history?.length
+                      ? h('span', {
+                          style: { opacity: 0.5 },
+                          title: `旧值：${item.history.map((entry) => entry.value).join(' / ')}`,
+                        }, ` · 更新过 ${item.history.length} 次`)
+                      : null,
                     h('span', { style: { display: 'block', opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: item.evidence ?? '' }, item.evidence ? `原话「${item.evidence}」` : '（没有原话）'),
                   ),
                   ...actions(`obs:${item.key}`, () => void post({ action: 'drop-observation', key: item.key }, `drop-${item.key}`)),

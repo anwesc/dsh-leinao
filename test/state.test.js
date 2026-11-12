@@ -143,17 +143,15 @@ test('prompt: 未出生给引导，出生后给档位行为', () => {
   assert.equal(band({ v: 0.3, e: 0.6, t: 0.2 }).id, 'low')
 })
 
-test('prompt: 一条记忆都没有时提示怎么记，有记忆后不再唠叨', () => {
+test('prompt: 写记忆是常驻准则，不靠临时提醒', () => {
   const { state } = fold([makeEvent('seed', 'dev-a', { name: '阿鱼' }, at('2026-11-01T10:00:00+08:00'))])
-  const bare = buildInjection(state, Date.now(), { recordHint: true })
-  assert.match(bare, /persona_remember/)
-  assert.match(bare, /persona_observe/)
-
-  const withMemory = buildInjection(state, Date.now(), { memory: '【记忆】你记得这些事：x', recordHint: true })
-  assert.ok(!withMemory.includes('【记忆】还没有记忆'))
-
-  const noHint = buildInjection(state, Date.now(), {})
-  assert.ok(!noHint.includes('还没有记忆'))
+  const text = buildInjection(state, Date.now(), {})
+  assert.match(text, /怎么记/)
+  assert.match(text, /persona_remember/)
+  assert.match(text, /persona_observe/)
+  assert.match(text, /别向对方宣布/)
+  // 可关：配置项留口子，真不需要时整行去掉
+  assert.ok(!buildInjection(state, Date.now(), { rememberRule: false }).includes('怎么记'))
 })
 
 test('prompt: 注入块不会长到失控', () => {

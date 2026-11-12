@@ -324,9 +324,20 @@ test('observations: 同 key 覆盖，保留首次时间与次数；非法事件�
   assert.equal(item.count, 2)
   assert.equal(item.at, '2026-10-01T10:00:00+08:00')
   assert.equal(item.updatedAt, '2026-10-05T10:00:00+08:00')
+  assert.deepEqual(item.history, [{ value: '常熬夜写代码', at: '2026-10-01T10:00:00+08:00' }])
   assert.equal(diagnostics.skipped, 1)
   assert.deepEqual(observationLines(state), ['- 作息：最近在调早睡'])
   assert.deepEqual(observationStats(state), { count: 1, confident: 1 })
+})
+
+test('observations: 同 key 同值重复写，历史不重复堆', () => {
+  const { state } = fold([
+    makeEvent('observation', 'dev-t', { key: '偏好', value: '不喜欢长回复' }, at('2026-10-01T10:00:00+08:00')),
+    makeEvent('observation', 'dev-t', { key: '偏好', value: '不喜欢长回复' }, at('2026-10-02T10:00:00+08:00')),
+  ])
+  const item = state.observations['偏好']
+  assert.equal(item.count, 2)
+  assert.deepEqual(item.history, [])
 })
 
 test('observations: 低置信度会被标出来，注入只取前几条', () => {

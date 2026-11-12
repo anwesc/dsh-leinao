@@ -106,6 +106,10 @@ test('settings: 白名单只放行认识的键，未知键明确报错', () => {
 test('settings: 数字夹到区间、布尔/字符串校验类型', () => {
   const clamped = sanitizePatch({ memory: { indexMaxLines: 999 }, prompt: { maxChars: 1 } })
   assert.equal(clamped.ok, true)
+  // 写记忆提醒的四个开关都要能写，否则设置页会静默失效
+  for (const key of ['memory.nudgeEnabled', 'memory.nudgeCooldownMinutes', 'memory.nudgeRecentWriteHours', 'memory.nudgeMaxPerSession']) {
+    assert.ok(EDITABLE[key], `${key} 应当在可写白名单里`)
+  }
   assert.equal(clamped.patch.memory.indexMaxLines, EDITABLE['memory.indexMaxLines'].max)
   assert.equal(clamped.patch.prompt.maxChars, EDITABLE['prompt.maxChars'].min)
 

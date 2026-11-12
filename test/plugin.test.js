@@ -266,6 +266,75 @@ test('plugin: 用户模型单独一块注入，和人格记忆分开', async (t)
   assert.ok(!/常熬夜写代码/.test(ctx.prompt.text()), '人格块不该带观察')
 })
 
+test('plugin: 用户说「以后都这样」时，下一轮注入轻提一句，且只提一次', async (t) => {
+  const { ctx } = setup(t)
+  const seed = ctx.registered.find((tool) => tool.name === 'persona_seed')
+  await seed.execute({ name: '阿鱼', user_call: '老大' })
+
+  const fire = ctx.handlers.get('session/event')
+  fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '以后周末别给我排活' }] } })
+  await wait(30)
+  const nudged = ctx.prompt.text()
+  assert.match(nudged, /【记忆】这句像/)
+  assert.match(nudged, /闲聊，不用记/)
+
+  // 同类信号本会话只提一次
+  fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '以后也别喊我早起' }] } })
+  await wait(30)
+  assert.ok(!/【记忆】这句像/.test(ctx.prompt.text()))
+
+  // 换一类信号还能提（这里冷却时间很短，避免测试等太久）
+  fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '我不喜欢太长的回复' }] } })
+  await wait(30)
+  assert.ok(!/【记忆】这句像/.test(ctx.prompt.text()), '冷却中不该重复提')
+})
+
+test('plugin: 同类信号十分钟内出现两次，自动记一条低置信度观察，不打扰对话', async (t) => {
+  const { dir, ctx } = setup(t)
+  const seed = ctx.registered.find((tool) => tool.name === 'persona_seed')
+  await seed.execute({ name: '阿鱼', user_call: '老大' })
+  const fire = ctx.handlers.get('session/event')
+  const say = (text) => fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
+
+  say('我不喜欢太长的回复')
+  await wait(25)
+  let { events } = scanEvents(dir)
+  assert.ok(!events.some((event) => event.kind === 'observation'), '第一次出现不该写')
+
+  say('我不喜欢被追问细节')
+  await wait(25)
+  ;({ events } = scanEvents(dir))
+  const auto = events.filter((event) => event.kind === 'observation')
+  assert.equal(auto.length, 1)
+  assert.equal(auto[0].key, '偏好')
+  assert.equal(auto[0].confidence, 0.4)
+  assert.equal(auto[0].evidence, '我不喜欢被追问细节')
+
+  // 同类再出现不重复写
+  say('我不喜欢太吵的地方')
+  await wait(25)
+  ;({ events } = scanEvents(dir))
+  assert.equal(events.filter((event) => event.kind === 'observation').length, 1)
+
+  // 自动写的内容会进用户模型，并且可以删
+  const block = ctx.prompts['about-user']
+  assert.match(block.text(), /偏好：我不喜欢被追问细节/)
+})
+
+test('plugin: 同类话里带密钥时，自动草稿不写', async (t) => {
+  const { dir, ctx } = setup(t)
+  const seed = ctx.registered.find((tool) => tool.name === 'persona_seed')
+  await seed.execute({ name: '阿鱼', user_call: '老大' })
+  const fire = ctx.handlers.get('session/event')
+  const say = (text) => fire({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text }] } })
+
+  say('以后用 sk-abcdefgh12345678 这个 key')
+  say('我不喜欢这个 password: hunter2')
+  await wait(40)
+  const { events } = scanEvents(dir)
+  assert.ok(!events.some((event) => event.kind === 'observation'), '敏感信息不该落进 journal')
+})
+
 test('plugin: /leinao proactive on|off 只影响当前会话，落盘可查', async (t) => {
   const { dir, ctx } = setup(t)
   const command = ctx.commandsRegistered.find((item) => item.name === 'leinao')
@@ -329,3 +398,45 @@ test('plugin: 增量应用与全量重放结果一致（写事件不用整份重
   assert.deepEqual(cached.state.observations, replay.observations)
   assert.equal(cached.state.bond.level, replay.bond.level)
 })
+
+test('plugin: 全量记录对话，敏感内容只留占位', async (t) => {
+  const { dir, ctx } = setup(t)
+  await ctx.registered.find((tool) => tool.name === 'persona_seed').execute({ name: '阿鱼' })
+  const fire = ctx.handlers.get('session/event')
+
+  fire({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '以后周末别排活' }] } })
+  fire({ id: 's1' }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '好，记下了' }] } } })
+  fire({ id: 's2' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '我的 key 是 sk-abcdefgh12345678' }] } })
+  await wait(40)
+
+  const { events } = scanEvents(dir)
+  const messages = events.filter((event) => event.kind === 'message')
+  assert.equal(messages.length, 3)
+  assert.equal(messages[0].role, 'user')
+  assert.equal(messages[0].text, '以后周末别排活')
+  assert.equal(messages[0].session, 's1')
+  assert.equal(messages[1].role, 'assistant')
+  assert.match(messages[2].text, /已过滤/)
+  assert.ok(!JSON.stringify(events).includes('sk-abcdefgh12345678'))
+
+  // 消息不进 state.json，只给索引读
+  const cached = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
+  assert.equal(cached.state.pages && Object.keys(cached.state.pages).length, 0)
+  assert.ok(!('messages' in cached.state))
+})
+
+test('plugin: 提到以前说过的事时，召回相关片段进注入', async (t) => {
+  const { ctx } = setup(t)
+  await ctx.registered.find((tool) => tool.name === 'persona_seed').execute({ name: '阿鱼' })
+  const fire = ctx.handlers.get('session/event')
+
+  fire({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '记忆图谱改成三栏布局，左边目录右边内容' }] } })
+  await wait(20)
+  fire({ id: 's1' }, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '记忆图谱三栏布局现在怎么样' }] } })
+  await wait(20)
+
+  const text = ctx.prompts.persona.text()
+  assert.match(text, /【相关】/)
+  assert.match(text, /三栏布局/)
+})
+

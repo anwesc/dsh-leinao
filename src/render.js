@@ -160,7 +160,8 @@ export function renderUserModel(state, nowMs = Date.now(), options = {}) {
     lines.push('## 观察', '')
     for (const item of observed) {
       const evidence = item.evidence ? `（原话「${String(item.evidence).slice(0, 60)}」）` : ''
-      lines.push(`- **${item.key}**：${item.value} · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}${evidence}`)
+      const old = item.history?.length ? ` · 旧值「${String(item.history[item.history.length - 1].value).slice(0, 40)}」` : ''
+      lines.push(`- **${item.key}**：${item.value} · 置信度 ${Number(item.confidence ?? 0).toFixed(2)}${evidence}${old}`)
     }
     lines.push('')
   }

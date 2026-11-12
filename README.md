@@ -5,7 +5,7 @@
 它不替你记流水账：只记你明说值得记的，和它自己整理过的；剩下的就是让"我"随长期相处慢慢变成一个有脾气、有状态的家伙：
 初始只有名字 / 性别 / 它对你的称呼，其余全靠你们聊出来。
 
-当前版本 **v0.1.0**：事件溯源内核 + 首次引导 + 启发式心情 + 注入 + 关系台阶 / 性格突变 + 疙瘩自动缓和（mend）+ 记忆页（索引注入 / 召回 / 折叠 / 软删 / 互链）+ 用户模型（`subject`、带原话证据的观察、独立的 `view/USER.md`、可管理列表）+ 主动开口（跨插件礼貌锁、会话/工作区两级开关、`/leinao` 命令）+ 记忆图谱与记忆健康 + 本地 git + 设置页（两栏 / 搜索 / 锚点）。
+当前版本 **v0.1.0**：事件溯源内核 + 首次引导 + 启发式心情 + 注入 + 关系台阶 / 性格突变 + 疙瘩自动缓和（mend）+ 记忆页（索引注入 / 召回 / 折叠 / 软删 / 互链）+ 全量对话记录与字面检索 + 用户模型（`subject`、带原话证据的观察、独立的 `view/USER.md`、可管理列表）+ 主动开口（跨插件礼貌锁、会话/工作区两级开关、`/leinao` 命令）+ 记忆图谱与记忆健康 + 本地 git + 设置页（两栏 / 搜索 / 锚点）。
 
 ---
 
@@ -113,6 +113,7 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `journal.remote` | `""` | 传了就先 `git remote add origin <url>` |
 | `journal.commitDebounceMs` | `5000` | 合并频繁写入，攒一会儿再提交 |
 | `journal.pushDebounceMs` | `60000` | 提交后攒多久再推，连聊几轮只推一次 |
+| `journal.recordMessages` | `true` | 每条消息进 journal 供检索；敏感内容只存占位 |
 | `journal.pullTimeoutMs` | `20000` | git 拉取/推送的超时 |
 | `mood.debounceMs` | `2000` | 心情状态写盘的防抖 |
 | `mood.halfLifeHours` | `6` | 心情回基线的时间尺度 |
@@ -131,6 +132,18 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `memory.foldEveryTurns` | `30` | 每多少轮提一次整理 |
 | `memory.foldMaxPrompts` | `3` | 一次会话最多提几次 |
 | `memory.weakRecallHours` | `6` | 同一页弱召回的冷却 |
+| `memory.nudgeEnabled` | `true` | 用户说到长期偏好/约定时，提一句要不要记 |
+| `memory.nudgeCooldownMinutes` | `30` | 两次提醒之间的冷却 |
+| `memory.nudgeRecentWriteHours` | `24` | 最近写过记忆就不提醒 |
+| `memory.nudgeMaxPerSession` | `0` | 每次会话提醒上限；0 表示不限 |
+| `memory.autoObservation` | `true` | 同类话十分钟内说两次，自动记一条低置信度观察 |
+| `memory.recallEnabled` | `true` | 从全量对话里按字面召回相关片段 |
+| `memory.recallMaxLines` | `2` | 每次最多注入几条相关片段；0 表示不注入 |
+| `memory.embedding.enabled` | `false` | 开启向量检索（会把对话原文发给下面的服务） |
+| `memory.embedding.baseUrl` | `""` | OpenAI 兼容地址，如 `https://api.siliconflow.cn/v1` |
+| `memory.embedding.model` | `""` | embedding 模型名，如 `BAAI/bge-m3` |
+| `memory.embedding.dims` | `0` | 向量维度；0 表示以第一次返回为准 |
+| `memory.embedding.timeoutMs` | `8000` | 单次请求超时 |
 | `proactive.enabled` | `true` | 允许它在对话安静下来后主动说一句 |
 | `proactive.minMinutes` | `40` | 两次主动开口的最短间隔（分钟） |
 | `proactive.maxMinutes` | `120` | 两次主动开口的最长间隔（分钟），实际在这区间随机 |
@@ -236,6 +249,35 @@ DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模�
 - **自动只到提醒这一步**：到点时注入末尾多一行「记忆整理：标签「X」有 N 条…要整理就调 persona_digest」。要不要压、怎么压，由当前对话里的模型决定 —— 摘要用的是完整上下文，插件不额外发请求、不偷偷花钱。提醒每 30 轮最多一次、一次会话最多 3 次，不接就不再提；
 - 删除是软删（`forget` 事件），原文永远留在 journal 里；
 - **观察必须有证据**：`persona_observe` 只收能在最近对话里逐字找到的原话；找不到就拒绝写入 —— 宁可这次空着，也不把猜测写成画像。
+- **写记忆是无感的**：插件不会自己写记忆，但注入里常驻一条准则「遇到长期约定、偏好、边界就顺手记，别向对方宣布」——用户看不到任何提示。
+- **自动草稿**：你说出「以后 / 我不喜欢 / 别再 / 记住」这类话，同类十分钟内出现两次（说明不是随口一说），插件直接记一条置信度 0.4 的观察，value 和 evidence 都用原话，在「用户模型」卡里可见可删。每类本会话只写一次，重复内容会跳过（`memory.autoObservation` 可关）。
+- **敏感信息不进库**：自动草稿写之前先过一遍正则（`sk-`、`password:`、`token:`、17 位身份证、私钥头），命中就整条跳过 —— journal 里的东西不会自己消失，宁漏不存。
+- **同一个 key 只留当前值**：新的观察覆盖旧值时，旧值进 `history`（最多 5 条），`USER.md` 与卡片显示「旧值」「更新过 N 次」，不会把「不喜欢太长」和「不喜欢长回复」并排堆成两条。
+- **可选的轻提醒**：`memory.nudgeEnabled` 打开时，信号出现后下一轮注入会多一行「这句像…要不要记」。护栏是「同类信号一次会话只提一次 + 提醒后冷却 + 最近 24 小时写过就不提」，不按次数硬掐（`memory.nudgeMaxPerSession` 默认 0 = 不限）。
+
+## 对话检索
+
+记忆页是「整理过的」，检索是「原话」：每条消息都会被记一条 `message` 事件（`role / text / session`，截 2000 字），journal 里留着，`state.json` 不存。
+
+- **默认不是向量**：本地跑模型太重，所以先做一个中文二元组倒排索引 + BM25 打分，零依赖、可重建、结果确定；想要语义召回，见下面的「向量检索（可选）」；
+- 索引在内存里，按 journal 指纹缓存：换机器、`git pull` 之后从 journal 自己重建，不额外落文件；
+- 每轮拿你刚说的话去查，命中就在人格块后面加 1–2 行「【相关】你这句话，以前的对话里提过：…」，每条截 100 字；
+- 同义词会漏（「太长」未必能召回「啰嗦」），这是字面检索的代价；需要语义召回就开可选向量检索；
+- 敏感内容（`sk-`、password、token、身份证、私钥头）不落库，只存 `[已过滤：含密钥或隐私信息]`；
+- 代价是 journal 变大：一天 100 轮大约 100KB，而且会进 git 提交。嫌大可关 `journal.recordMessages` 或 `memory.recallEnabled`。
+
+### 向量检索（可选，默认关）
+
+字面检索抓不住「啰嗦 → 太长」这种同义词。想要语义召回，可以接一个 OpenAI 兼容的 embedding 服务：
+
+1. 设置页「记忆」组里打开「向量检索」，填 `baseUrl`（如 `https://api.siliconflow.cn/v1` 或本机 `http://127.0.0.1:11434/v1`）和 `model`（如 `BAAI/bge-m3`）；
+2. 密钥只从环境变量读：`DSH_LEINAO_EMBED_KEY`（不写进设置文件、不进 git）；
+3. 重启 DSH。之后新消息会异步补向量，存 `<dataDir>/index/vectors.json`（旁路文件，删了会自动重建）。
+
+- 检索时字面 BM25 和向量结果用 RRF 融合，各取所长；接口失败、超时、没算好，都静默退回纯字面，不挡对话；
+- 每轮只在你说话时给当前这句话算一次向量（8 秒超时），不会把整段历史重算；
+- **隐私**：开启后对话原文（含截断后的片段）会发给这个服务。介意就别开，或用本机 Ollama / llama.cpp 之类；
+- 换模型或地址会作废旧向量（按 `id = url|model` 隔离），第一次重建会慢一点。
 
 ## 用户模型管理
 

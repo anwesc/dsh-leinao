@@ -23,6 +23,8 @@ export const DEFAULT_CONFIG = {
     git: true,
     push: false,
     remote: '',
+    /** 全量记每条对话（进 journal 供索引，不进 state.json）；关掉只留情绪/记忆事件 */
+    recordMessages: true,
     pullTimeoutMs: 20_000,
     commitDebounceMs: 5_000,
     pushDebounceMs: 60_000,
@@ -56,6 +58,25 @@ export const DEFAULT_CONFIG = {
     foldMaxPrompts: 3,
     /** 注入命中后多久内不重复记 recall */
     weakRecallHours: 6,
+    /** 写记忆的轻提醒：同一类信号一次会话只提一次，提完冷却，最近写过就不提 */
+    nudgeEnabled: true,
+    nudgeCooldownMinutes: 30,
+    nudgeRecentWriteHours: 24,
+    /** 0 表示不按次数掐 */
+    nudgeMaxPerSession: 0,
+    /** 同类信号两轮内出现两次时，自动记一条低置信度观察（不打扰对话） */
+    autoObservation: true,
+    /** 从全量对话里按字面召回相关片段（二元组倒排，不做向量） */
+    recallEnabled: true,
+    recallMaxLines: 2,
+    /** 可选向量检索：OpenAI 兼容的 /embeddings；默认关，开了对话原文会发给这个服务 */
+    embedding: {
+      enabled: false,
+      baseUrl: '',
+      model: '',
+      dims: 0,
+      timeoutMs: 8000,
+    },
   },
   /** 主动开口：对话安静下来后，自己想起一件事说一句。宁缺毋滥。 */
   proactive: {

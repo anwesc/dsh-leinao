@@ -89,6 +89,13 @@ export function applyEvent(state, event) {
       if (!key || !value || value.length > OBSERVATION.maxValueChars) return false
       if (!state.observations) state.observations = {}
       const prev = state.observations[key]
+      // 同一个 key 只保留「当前值」；被替换的旧值进 history（最多 5 条），
+      // 这样「我不喜欢太长」不会和「我不喜欢长回复」并排堆成两条。
+      const history = prev && prev.value === value
+        ? (prev.history ?? [])
+        : prev
+          ? [...(prev.history ?? []), { value: prev.value, at: prev.updatedAt }].slice(-5)
+          : []
       state.observations[key] = {
         key,
         value,
@@ -97,6 +104,7 @@ export function applyEvent(state, event) {
         at: prev?.at ?? event.at,
         updatedAt: event.at,
         count: (prev?.count ?? 0) + 1,
+        history,
       }
       break
     }
@@ -320,6 +328,12 @@ export function applyEvent(state, event) {
       } else {
         return false
       }
+      break
+    }
+    case 'message': {
+      // 全量对话只给索引读，不进 state：state.json 不该为聊天记录膨胀。
+      const text = typeof event.text === 'string' ? event.text.trim() : ''
+      if (!text) return false
       break
     }
     case 'milestone': {

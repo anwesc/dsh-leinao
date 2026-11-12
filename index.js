@@ -31,6 +31,10 @@ import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
 import { detectMend } from './src/bond.js'
 import { foldCandidates, memoryIndex, memoryStats } from './src/memory.js'
+import { AUTO, autoDraft, detectMemorySignal, hasSensitive, nudgeLine, shouldNudge } from './src/remind.js'
+import { buildIndex, recallLines } from './src/indexer.js'
+import { createEmbedder } from './src/embed.js'
+import { loadVectors, searchVectors, syncVectors } from './src/vectors.js'
 import { buildGraph } from './src/graph.js'
 import { buildHealth } from './src/health.js'
 import { ActivityTracker, ProactiveNudge } from './src/proactive.js'
@@ -139,6 +143,13 @@ export function apply(ctx, inlineConfig = {}) {
   let currentFp = journalFingerprint(dataDir)
   const evidence = createEvidenceCheck()
   const backoff = createBackoff()
+  /** 可选向量检索：默认关；配了地址和模型才建，出错只 warn，永远退回字面检索 */
+  const embedder = createEmbedder(cfg.memory?.embedding)
+  let vectorStore = embedder ? loadVectors(dataDir, embedder.id) : null
+  let cueVec = null
+  let cueForVec = ''
+  let vectorTimer = null
+  let vectorBusy = false
   /** 会话级开关：某个会话可以单独关掉主动开口（全局仍开） */
   const sessionGate = new SessionGate({
     path: join(cfg.dshHome, 'leinao-sessions.json'),
@@ -167,6 +178,14 @@ export function apply(ctx, inlineConfig = {}) {
   let lastCue = ''
   let reminderTurn = null
   let reminderCount = 0
+  /** 写记忆提醒：待注入的那一条，以及本会话的去重/冷却状态 */
+  let pendingNudge = null
+  const nudgedKeys = new Set()
+  let lastNudgeAt = 0
+  let nudgeCount = 0
+  /** 自动草稿：同类信号的出现记录，以及本会话已经自动写过的类 */
+  const signalSeen = new Map()
+  const autoWritten = new Set()
 
   /**
    * 读状态：先比 journal 指纹，没变就直接用内存里的；
@@ -270,12 +289,73 @@ export function apply(ctx, inlineConfig = {}) {
     return event
   }
 
+  // ── 对话索引 ─────────────────────────────────────────────────────────
+  // 全量消息只进 journal（供索引），不进 state.json；索引按 journal 指纹缓存在内存，
+  // 换机器/git pull 之后也能从 journal 自己长出来。
+  let messageIndexCache = { fp: '', index: null }
+  function messageIndexNow() {
+    const base = refresh()
+    if (messageIndexCache.index && messageIndexCache.fp === currentFp) return messageIndexCache.index
+    const docs = (base.scan?.events ?? []).filter((event) => event.kind === 'message')
+    messageIndexCache = { fp: currentFp, index: buildIndex(docs) }
+    return messageIndexCache.index
+  }
+
+  function recordMessage(role, text, session) {
+    if (cfg.journal?.recordMessages === false) return
+    const clean = String(text ?? '').trim().slice(0, 2000)
+    if (!clean) return
+    record({
+      kind: 'message',
+      role,
+      text: hasSensitive(clean) ? '[已过滤：含密钥或隐私信息]' : clean,
+      session: session?.header?.id ?? session?.id ?? null,
+    })
+    scheduleVectorSync()
+  }
+
+  /** 向量同步：异步、可失败，失败只是少一路召回 */
+  function scheduleVectorSync(delayMs = 1500) {
+    if (!embedder || vectorTimer) return
+    vectorTimer = setTimeout(() => {
+      vectorTimer = null
+      void syncVectorStore()
+    }, delayMs)
+    vectorTimer.unref?.()
+  }
+
+  async function syncVectorStore() {
+    if (!embedder || vectorBusy) return
+    vectorBusy = true
+    try {
+      const base = refresh()
+      const messages = (base.scan?.events ?? []).filter((event) => event.kind === 'message')
+      vectorStore = await syncVectors({ dataDir, messages, embedder, store: vectorStore })
+      log.debug?.(`[leinao] 向量已同步：${vectorStore.items.length} 条`)
+    } catch (error) {
+      log.warn?.(`[leinao] 向量同步失败（继续用字面检索）：${error.message}`)
+    } finally {
+      vectorBusy = false
+    }
+  }
+
   // ── 记忆 ─────────────────────────────────────────────────────────────
   // 索引里被"这句话"带出来的页，记一次弱召回；同一页 6 小时内只记一次，
   // 免得每轮都刷一条事件。常被提起的事，强度会慢慢升上去。
   function noteCue(text) {
     lastCue = String(text ?? '').slice(0, 400)
     if (!lastCue) return
+    // 查询向量异步算：prompt 是同步的，算好之前这一轮就先用字面结果
+    if (embedder) {
+      cueForVec = lastCue
+      cueVec = null
+      embedder
+        .embed([lastCue])
+        .then(([vec]) => {
+          if (cueForVec === lastCue) cueVec = vec ?? null
+        })
+        .catch((error) => log.warn?.(`[leinao] 查询向量失败：${error.message}`))
+    }
     const { state } = refresh()
     const index = memoryIndex(state, Date.now(), lastCue, cfg.memory)
     const now = Date.now()
@@ -287,6 +367,75 @@ export function apply(ctx, inlineConfig = {}) {
       if (Number.isFinite(last) && now - last < cfg.memory.weakRecallHours * 3600_000) continue
       record({ kind: 'recall', path: item.path, via: 'inject' })
     }
+  }
+
+  /** 最近一次写记忆的时间（页或观察），用来判断模型有没有记的习惯 */
+  function latestWriteAt(state) {
+    let latest = 0
+    for (const page of Object.values(state.pages ?? {})) {
+      const at = Date.parse(page.updatedAt ?? page.at ?? '')
+      if (Number.isFinite(at) && at > latest) latest = at
+    }
+    for (const item of Object.values(state.observations ?? {})) {
+      const at = Date.parse(item.updatedAt ?? item.at ?? '')
+      if (Number.isFinite(at) && at > latest) latest = at
+    }
+    return latest || null
+  }
+
+  /**
+   * 用户这句话像长期偏好/约定时，排一条注入提醒。
+   * 只在「同类没提过、过了冷却、最近没写过」时排；不按次数硬掐。
+   */
+  /**
+   * 自动草稿：同一类信号十分钟内出现两次，就当不是随口一说，
+   * 直接记一条置信度 0.4 的观察（原话当证据），对话里什么都不说。
+   * 每类本会话只自动写一次；同样的 key+value 已存在就跳过。
+   */
+  function autoObserve(signal, text) {
+    if (cfg.memory?.autoObservation === false) return
+    const now = Date.now()
+    const entry = signalSeen.get(signal.key) ?? { count: 0, firstAt: now }
+    if (now - entry.firstAt > AUTO.windowMinutes * 60_000) {
+      entry.count = 0
+      entry.firstAt = now
+    }
+    entry.count += 1
+    signalSeen.set(signal.key, entry)
+    if (entry.count < AUTO.minCount || autoWritten.has(signal.key)) return
+
+    const draft = autoDraft(signal, text)
+    if (!draft?.value) return
+    const { state } = refresh()
+    const dup = Object.values(state.observations ?? {}).some(
+      (item) => item.key === draft.key && item.value === draft.value,
+    )
+    autoWritten.add(signal.key)
+    if (dup) return
+    record({ kind: 'observation', ...draft, why: 'auto' })
+    log.debug?.(`[leinao] 自动记了一条观察：${draft.key}`)
+  }
+
+  function maybeNudge(text) {
+    const signal = detectMemorySignal(text)
+    if (!signal) return
+    const now = Date.now()
+    autoObserve(signal, text)
+    const { state } = refresh()
+    const ok = shouldNudge({
+      signalKey: signal.key,
+      lastNudgeAt,
+      nudgedKeys,
+      lastWriteAt: latestWriteAt(state),
+      now,
+      config: cfg.memory,
+      count: nudgeCount,
+    })
+    if (!ok) return
+    nudgedKeys.add(signal.key)
+    lastNudgeAt = now
+    nudgeCount += 1
+    pendingNudge = { key: signal.key, label: signal.label }
   }
 
   /**
@@ -318,17 +467,25 @@ export function apply(ctx, inlineConfig = {}) {
         const { state } = refresh()
         const now = Date.now()
         const index = memoryIndex(state, now, lastCue, { ...cfg.memory, subject: 'self' })
-        const noMemory = Object.keys(state.pages ?? {}).length === 0
-          && Object.keys(state.observations ?? {}).length === 0
-        const text = buildInjection(state, now, {
-          memory: index.text,
-          reminder: foldReminder(state, now),
-          recordHint: noMemory,
-          mood: cfg.mood,
-          userName: cfg.userName,
+        const nudge = pendingNudge ? nudgeLine(pendingNudge.label) : ''
+        pendingNudge = null
+        const reminder = foldReminder(state, now)
+        const recall = recallLines(messageIndexNow(), lastCue, cfg.memory, {
+          vectorHits: embedder && cueVec ? searchVectors(vectorStore, cueVec) : [],
         })
+        const options = { reminder, nudge, mood: cfg.mood, userName: cfg.userName }
         const cap = Number(cfg.prompt.maxChars) || 0
-        return cap > 0 && text.length > cap ? `${text.slice(0, Math.max(1, cap - 1))}…` : text
+        const text = buildInjection(state, now, { ...options, memory: index.text, recall })
+        if (!(cap > 0) || text.length <= cap) return text
+        // 超预算时先砍记忆目录和召回（保住底线和提醒），还超才硬截
+        const slim = buildInjection(state, now, { ...options, memory: '', recall: '' })
+        const room = cap - slim.length - 2
+        if (room >= 40) {
+          const clipped = `${index.text.slice(0, Math.max(1, room - 1))}…`
+          const withMemory = buildInjection(state, now, { ...options, memory: clipped, recall: '' })
+          if (withMemory.length <= cap) return withMemory
+        }
+        return `${slim.slice(0, Math.max(1, cap - 1))}…`
       } catch (error) {
         log.warn?.(`[leinao] 生成注入块失败：${error.message}`)
         return ''
@@ -539,7 +696,9 @@ export function apply(ctx, inlineConfig = {}) {
     try {
       if (event?.type === 'assistant/message') {
         const text = textOf(event.data?.message?.content)
-        if (text) mendFrom(text, 'assistant')
+        if (!text) return
+        recordMessage('assistant', text, session)
+        mendFrom(text, 'assistant')
         return
       }
       if (event?.type !== 'user/message') return
@@ -547,6 +706,10 @@ export function apply(ctx, inlineConfig = {}) {
       if (data.source?.kind !== 'user') return
       const text = textOf(data.content)
       if (!text) return
+      // 先取上一轮时间，再记录消息：否则记录本身会刷新 lastEventAt，把"隔了多久"的信号抹掉
+      const before = refresh().state
+      const prevAt = before.stats?.lastEventAt ? Date.parse(before.stats.lastEventAt) : null
+      recordMessage('user', text, session)
       evidence.remember(text)
       mendFrom(text, 'user')
 
@@ -554,7 +717,6 @@ export function apply(ctx, inlineConfig = {}) {
       if (state.phase !== 'active') return
 
       const now = Date.now()
-      const prevAt = state.stats?.lastEventAt ? Date.parse(state.stats.lastEventAt) : null
       const signal = appraise({ text, role: 'user', at: now, prevAt })
       record({
         kind: 'affect',
@@ -564,6 +726,7 @@ export function apply(ctx, inlineConfig = {}) {
         role: 'user',
       })
       noteCue(text)
+      maybeNudge(text)
     } catch (error) {
       log.warn?.(`[leinao] 处理对话事件失败：${error.message}`)
     }
@@ -605,12 +768,14 @@ export function apply(ctx, inlineConfig = {}) {
 
   // 启动时把已有 journal 落成 state + PROFILE（首次运行会生成 view/PROFILE.md）
   persistNow()
+  scheduleVectorSync(3000)
   scheduleCommit(1_500)
 
   ctx.effect?.(() => () => {
     if (persistTimer) clearTimeout(persistTimer)
     if (commitTimer) clearTimeout(commitTimer)
     if (pushTimer) clearTimeout(pushTimer)
+    if (vectorTimer) clearTimeout(vectorTimer)
     persistNow()
     if (cfg.journal.git) {
       commitAll(dataDir, 'leinao: shutdown flush')
