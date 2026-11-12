@@ -137,6 +137,10 @@ window.__ModuleLoader__.load({
       },
     ]
 
+    // 菜单按「多久会动一次」排，不按开发顺序：日志这种一年改不了两次的排最后。
+    const GROUP_ORDER = ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'mood', 'journal']
+    GROUPS.sort((a, b) => GROUP_ORDER.indexOf(a.id) - GROUP_ORDER.indexOf(b.id))
+
     const ROW_INDEX = new Map(GROUPS.flatMap((group) => group.rows.map((row) => [row.key, row])))
 
     const PHASE_LABEL = { seed: '等待出生', active: '相处中' }
@@ -1517,7 +1521,7 @@ window.__ModuleLoader__.load({
     }
 
     // 纯逻辑给单测用；运行时形态不变（客户端拿不到本地模块，只能这样暴露）
-    const __test = { rowMatches, layoutNodes, projectPoint, flyAngles }
+    const __test = { rowMatches, layoutNodes, projectPoint, flyAngles, groupOrder: () => GROUPS.map((group) => group.id) }
 
     return { name, inject, apply, __test }
   },

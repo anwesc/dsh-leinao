@@ -83,6 +83,11 @@ test('client: 导出 name/inject，并注册设置页与会话 chip 两个 slot'
   assert.equal(chip.order, 100)
 })
 
+test('client: 设置菜单按改动频次排，日志放最后', () => {
+  const { groupOrder } = loadClient().__test
+  assert.deepEqual(groupOrder(), ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'mood', 'journal'])
+})
+
 test('client: rowMatches 只匹配标签/键名/说明，忽略大小写', () => {
   const { rowMatches } = loadClient().__test
   const row = { key: 'prompt.maxChars', label: '注入上限', hint: 'Character budget' }
