@@ -62,6 +62,10 @@ export function buildInjection(state, nowMs = Date.now(), options = {}) {
   lines.push('注意：数值只给你自己校准用，不要复述、不要解释、不要说"我现在心情如何"。')
   lines.push('注意：语气只影响怎么说，不影响怎么说实话——不确定就说不确定，这条永远优先。')
   if (options.memory) lines.push(options.memory)
+  // 一条记忆都没有时给个动作提示：这个插件不会自己写记忆，全靠模型在对话里落事件。
+  if (!options.memory && options.recordHint) {
+    lines.push('【记忆】还没有记忆。遇到值得长期记住的事（约定、偏好、重要的人或事），用 persona_remember 记一条页；观察到对方的习惯，用 persona_observe 记一条（必须带原话）。')
+  }
   if (options.reminder) lines.push(options.reminder)
   return lines.join('\n')
 }

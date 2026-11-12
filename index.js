@@ -318,9 +318,12 @@ export function apply(ctx, inlineConfig = {}) {
         const { state } = refresh()
         const now = Date.now()
         const index = memoryIndex(state, now, lastCue, { ...cfg.memory, subject: 'self' })
+        const noMemory = Object.keys(state.pages ?? {}).length === 0
+          && Object.keys(state.observations ?? {}).length === 0
         const text = buildInjection(state, now, {
           memory: index.text,
           reminder: foldReminder(state, now),
+          recordHint: noMemory,
           mood: cfg.mood,
           userName: cfg.userName,
         })
