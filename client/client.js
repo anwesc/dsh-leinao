@@ -52,10 +52,10 @@ window.__ModuleLoader__.load({
           { key: 'journal.git', kind: 'switch', label: '用 git 记录', hint: '关闭后只写文件，不做提交', restart: true },
           { key: 'journal.push', kind: 'switch', label: '自动推送', hint: '提交后按下面的间隔推送远程' },
           { key: 'journal.remote', kind: 'text', label: '远程仓库', hint: '留空沿用数据目录里已有的 origin', placeholder: 'https://github.com/you/persona.git' },
-          { key: 'journal.commitDebounceMs', kind: 'number', label: '提交防抖', hint: '安静这么久再提交一次', unit: '毫秒', min: 0, max: 120000, step: 500 },
-          { key: 'journal.pushDebounceMs', kind: 'number', label: '推送防抖', hint: '连着聊几轮只推一次', unit: '毫秒', min: 0, max: 3600000, step: 5000 },
+          { key: 'journal.commitDebounceMs', kind: 'number', label: '提交防抖', hint: '安静这么久再提交一次', unit: '毫秒', min: 0, max: 120000, step: 500, advanced: true },
+          { key: 'journal.pushDebounceMs', kind: 'number', label: '推送防抖', hint: '连着聊几轮只推一次', unit: '毫秒', min: 0, max: 3600000, step: 5000, advanced: true },
           { key: 'journal.recordMessages', kind: 'switch', label: '记录对话内容', hint: '每条消息进 journal，供检索召回；敏感信息会过滤。关掉只留情绪和记忆事件', restart: true },
-          { key: 'journal.pullTimeoutMs', kind: 'number', label: '同步超时', hint: 'git 拉取最多等多久', unit: '毫秒', min: 1000, max: 300000, step: 1000 },
+          { key: 'journal.pullTimeoutMs', kind: 'number', label: '同步超时', hint: 'git 拉取最多等多久', unit: '毫秒', min: 1000, max: 300000, step: 1000, advanced: true },
         ],
       },
       {
@@ -64,7 +64,7 @@ window.__ModuleLoader__.load({
         hint: '心情是快变量：每轮浮动，随后慢慢回到性格基线。',
         rows: [
           { key: 'mood.halfLifeHours', kind: 'number', label: '回基线半衰期', hint: '越多小时，情绪退得越慢', unit: '小时', min: 1, max: 72, step: 0.5 },
-          { key: 'mood.debounceMs', kind: 'number', label: '落盘防抖', hint: '状态写盘的安静间隔', unit: '毫秒', min: 0, max: 120000, step: 500 },
+          { key: 'mood.debounceMs', kind: 'number', label: '落盘防抖', hint: '状态写盘的安静间隔', unit: '毫秒', min: 0, max: 120000, step: 500, advanced: true },
         ],
       },
       {
@@ -73,9 +73,7 @@ window.__ModuleLoader__.load({
         hint: '每轮塞进 system prompt 的那段人格文本。',
         rows: [
           { key: 'prompt.maxChars', kind: 'number', label: '注入上限', hint: '超过就截断，宁短勿长', unit: '字符', min: 200, max: 8000, step: 100 },
-          { key: 'prompt.order', kind: 'number', label: '注入顺序', hint: '数值小的排前面；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
           { key: 'prompt.userMaxChars', kind: 'number', label: '用户模型上限', hint: '用户模型的观察单独一块，0 表示关掉', unit: '字符', min: 0, max: 4000, step: 50 },
-          { key: 'prompt.userOrder', kind: 'number', label: '用户模型顺序', hint: '通常紧跟人格块；改完需要重启', unit: '序号', min: 0, max: 1000, step: 10, restart: true },
         ],
       },
       {
@@ -85,27 +83,33 @@ window.__ModuleLoader__.load({
         open: true,
         rows: [
           { key: 'memory.indexMaxLines', kind: 'number', label: '索引行数', hint: '每轮最多带几条记忆', unit: '行', min: 1, max: 20, step: 1 },
-          { key: 'memory.indexMaxChars', kind: 'number', label: '索引字数', hint: '目录总长度上限', unit: '字', min: 40, max: 4000, step: 20 },
-          { key: 'memory.halfLifeDays', kind: 'number', label: '记忆半衰期', hint: '强度多久减半', unit: '天', min: 1, max: 365, step: 1 },
-          { key: 'memory.strongThreshold', kind: 'number', label: '常驻阈值', hint: '强度高于此值每轮都在索引里', unit: '0–1', min: 0.05, max: 1, step: 0.05 },
-          { key: 'memory.hideBelow', kind: 'number', label: '淡出阈值', hint: '低于此值退出索引，只能显式召回', unit: '0–1', min: 0, max: 0.99, step: 0.05 },
+          { key: 'memory.indexMaxChars', kind: 'number', label: '索引字数', hint: '目录总长度上限', unit: '字', min: 40, max: 4000, step: 20, advanced: true },
+          { key: 'memory.halfLifeDays', kind: 'number', label: '记忆半衰期', hint: '强度多久减半', unit: '天', min: 1, max: 365, step: 1, advanced: true },
+          { key: 'memory.strongThreshold', kind: 'number', label: '常驻阈值', hint: '强度高于此值每轮都在索引里', unit: '0–1', min: 0.05, max: 1, step: 0.05, advanced: true },
+          { key: 'memory.hideBelow', kind: 'number', label: '淡出阈值', hint: '低于此值退出索引，只能显式召回', unit: '0–1', min: 0, max: 0.99, step: 0.05, advanced: true },
         ],
       },
       {
         id: 'fold',
-        title: '整理与召回',
+        title: '整理旧记忆',
         hint: '旧记忆攒够了，就在注入末尾提醒模型调 persona_digest 压成一条。',
         rows: [
           { key: 'memory.foldAfterDays', kind: 'number', label: '多久没提', hint: '超过这些天没被召回才算旧', unit: '天', min: 0, max: 3650, step: 1 },
-          { key: 'memory.foldBelowStrength', kind: 'number', label: '旧到什么程度', hint: '强度低于此值才进候选', unit: '0–1', min: 0.05, max: 1, step: 0.05 },
           { key: 'memory.foldMinGroup', kind: 'number', label: '成组条数', hint: '同一标签至少几条才提醒', unit: '条', min: 2, max: 50, step: 1 },
           { key: 'memory.foldEveryTurns', kind: 'number', label: '提醒间隔', hint: '每多少轮提一次；0 表示不提醒', unit: '轮', min: 0, max: 1000, step: 10 },
-          { key: 'memory.foldMaxPrompts', kind: 'number', label: '整理提醒上限', hint: '每次会话最多提醒整理几次，免得烦', unit: '次', min: 0, max: 100, step: 1 },
-          { key: 'memory.weakRecallHours', kind: 'number', label: '弱召回冷却', hint: '同一页多久内不重复记召回', unit: '小时', min: 0, max: 720, step: 1 },
-          { key: 'memory.nudgeEnabled', kind: 'switch', label: '写记忆提醒', hint: '你说「以后都这样」这类话时，下一轮轻提一句要不要记' },
+          { key: 'memory.foldBelowStrength', kind: 'number', label: '旧到什么程度', hint: '强度低于此值才进候选', unit: '0–1', min: 0.05, max: 1, step: 0.05, advanced: true },
+          { key: 'memory.weakRecallHours', kind: 'number', label: '弱召回冷却', hint: '同一页多久内不重复记召回', unit: '小时', min: 0, max: 720, step: 1, advanced: true },
+        ],
+      },
+      {
+        id: 'nudge',
+        title: '写记忆提醒',
+        hint: '你说出「以后都这样」这类话时，下一轮轻提一句，别让它漏掉。',
+        rows: [
+          { key: 'memory.nudgeEnabled', kind: 'switch', label: '写记忆提醒', hint: '关掉后只在对话里体现，不再提醒' },
+          { key: 'memory.autoObservation', kind: 'switch', label: '自动草稿', hint: '同类话短时间内说两次，自动记一条低置信度观察，可删' },
           { key: 'memory.nudgeCooldownMinutes', kind: 'number', label: '提醒冷却', hint: '两次提醒之间至少隔多久', unit: '分钟', min: 0, max: 1440, step: 5 },
           { key: 'memory.nudgeMaxPerSession', kind: 'number', label: '写记忆提醒上限', hint: '每次会话最多提醒几次；0 表示不限，同类信号本身只提一次', unit: '次', min: 0, max: 50, step: 1 },
-          { key: 'memory.autoObservation', kind: 'switch', label: '自动草稿', hint: '同类话短时间内说两次，自动记一条低置信度观察，可删' },
         ],
       },
       {
@@ -129,16 +133,16 @@ window.__ModuleLoader__.load({
           { key: 'proactive.minMinutes', kind: 'number', label: '最短间隔', hint: '两次主动开口之间至少隔多久', unit: '分钟', min: 0, max: 1440, step: 5 },
           { key: 'proactive.maxMinutes', kind: 'number', label: '最长间隔', hint: '实际间隔在这两个值之间随机', unit: '分钟', min: 0, max: 1440, step: 5 },
           { key: 'proactive.maxPerSession', kind: 'number', label: '主动开口上限', hint: '一次会话最多主动几次；0 表示不限', unit: '次', min: 0, max: 50, step: 1 },
-          { key: 'proactive.cooldownSeconds', kind: 'number', label: '跨插件冷却', hint: '别的插件刚说过话就让一让', unit: '秒', min: 0, max: 3600, step: 30 },
-          { key: 'proactive.minStrength', kind: 'number', label: '最低记忆强度', hint: '太弱的旧事不主动提', unit: '0–1', min: 0, max: 1, step: 0.05 },
+          { key: 'proactive.cooldownSeconds', kind: 'number', label: '跨插件冷却', hint: '别的插件刚说过话就让一让', unit: '秒', min: 0, max: 3600, step: 30, advanced: true },
+          { key: 'proactive.minStrength', kind: 'number', label: '最低记忆强度', hint: '太弱的旧事不主动提', unit: '0–1', min: 0, max: 1, step: 0.05, advanced: true },
           { key: 'proactive.rementionDays', kind: 'number', label: '重提间隔', hint: '同一条记忆隔多少天才能再主动提', unit: '天', min: 0, max: 365, step: 1 },
-          { key: 'proactive.sessionTtlDays', kind: 'number', label: '会话开关保质期', hint: '会话级开关记多久；0 表示永不过期', unit: '天', min: 0, max: 365, step: 1 },
+          { key: 'proactive.sessionTtlDays', kind: 'number', label: '会话开关保质期', hint: '会话级开关记多久；0 表示永不过期', unit: '天', min: 0, max: 365, step: 1, advanced: true },
         ],
       },
     ]
 
     // 菜单按「多久会动一次」排，不按开发顺序：日志这种一年改不了两次的排最后。
-    const GROUP_ORDER = ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'mood', 'journal']
+    const GROUP_ORDER = ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'nudge', 'mood', 'journal']
     GROUPS.sort((a, b) => GROUP_ORDER.indexOf(a.id) - GROUP_ORDER.indexOf(b.id))
 
     const ROW_INDEX = new Map(GROUPS.flatMap((group) => group.rows.map((row) => [row.key, row])))
@@ -406,7 +410,7 @@ window.__ModuleLoader__.load({
       pitch: Math.atan2(-point.y, -Math.hypot(point.x, point.z)),
     })
 
-    function Card({ group, draft, changed, onToggle, filter = '', openSignal = 0, registerRef, alwaysOpen = false }) {
+    function Card({ group, draft, changed, onToggle, filter = '', openSignal = 0, registerRef, alwaysOpen = false, advanced = false }) {
       const [open, setOpen] = React.useState(() => {
         try {
           const saved = window.localStorage?.getItem(`dsh-leinao:card:${group.id}`)
@@ -418,7 +422,7 @@ window.__ModuleLoader__.load({
         return Boolean(group.open)
       })
       const needle = String(filter ?? '').trim().toLowerCase()
-      const rows = needle ? group.rows.filter((row) => rowMatches(row, needle)) : group.rows
+      const rows = group.rows.filter((row) => (row.advanced ? advanced || needle : true) && rowMatches(row, needle))
 
       React.useEffect(() => {
         if (openSignal) setOpen(true)
@@ -1064,6 +1068,13 @@ window.__ModuleLoader__.load({
       const [filter, setFilter] = React.useState('')
       const [jump, setJump] = React.useState({ id: null, n: 0 })
       const [active, setActive] = React.useState(GROUPS[0].id)
+      const [showAdvanced, setShowAdvanced] = React.useState(() => {
+        try {
+          return window.localStorage?.getItem(`${NS}:advanced`) === '1'
+        } catch {
+          return false
+        }
+      })
       const [wide, setWide] = React.useState(() => {
         try {
           return window.innerWidth >= 760
@@ -1146,9 +1157,10 @@ window.__ModuleLoader__.load({
       }, [draft, base, snapshot])
 
       const needle = filter.trim().toLowerCase()
+      const rowShown = (row) => (row.advanced ? showAdvanced || Boolean(needle) : true) && rowMatches(row, needle)
       const visibleGroups = needle
-        ? GROUPS.filter((group) => group.rows.some((row) => rowMatches(row, needle)))
-        : GROUPS
+        ? GROUPS.filter((group) => group.rows.some(rowShown))
+        : GROUPS.filter((group) => group.rows.some(rowShown))
 
       const activeGroupId = visibleGroups.some((group) => group.id === active) ? active : visibleGroups[0]?.id
 
@@ -1173,13 +1185,46 @@ window.__ModuleLoader__.load({
         { style: S.root },
         h('p', { style: S.intro }, '从名字开始，慢慢长成自己。这里改的是这台机器上的运行参数，保存后大多下一轮就生效。'),
 
-        h('input', {
-          type: 'search',
-          value: filter,
-          placeholder: '搜配置项：标签 / 键名 / 说明',
-          onChange: (event) => setFilter(event.target.value),
-          style: { ...S.input, width: '100%', textAlign: 'left', padding: '7px 10px', boxSizing: 'border-box' },
-        }),
+        h(
+          'div',
+          { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          h('input', {
+            type: 'search',
+            value: filter,
+            placeholder: '搜配置项：标签 / 键名 / 说明',
+            onChange: (event) => setFilter(event.target.value),
+            style: { ...S.input, flex: '1 1 auto', minWidth: 0, textAlign: 'left', padding: '7px 10px', boxSizing: 'border-box' },
+          }),
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: () => {
+                const next = !showAdvanced
+                setShowAdvanced(next)
+                try {
+                  window.localStorage?.setItem(`${NS}:advanced`, next ? '1' : '0')
+                } catch {
+                  /* 忽略 */
+                }
+              },
+              title: '阈值、节流这类内部参数，平时不用动',
+              style: {
+                flex: '0 0 auto',
+                padding: '6px 10px',
+                borderRadius: 999,
+                border: `1px solid ${showAdvanced ? ACCENT : BORDER}`,
+                background: showAdvanced ? 'rgba(76,110,245,.10)' : 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                fontSize: 12,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              },
+            },
+            showAdvanced ? '隐藏高级' : '高级',
+          ),
+        ),
 
         wide ? null : h(
           'div',
@@ -1238,7 +1283,7 @@ window.__ModuleLoader__.load({
                   },
                   ...visibleGroups.map((group) => {
                     const isActive = group.id === activeGroupId
-                    const groupChanged = group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length
+                    const groupChanged = group.rows.filter((row) => rowShown(row) && String(draft[row.key]) !== String(base[row.key])).length
                     return h(
                       'button',
                       {
@@ -1276,11 +1321,12 @@ window.__ModuleLoader__.load({
                       draft,
                       filter,
                       alwaysOpen: true,
+                      advanced: showAdvanced,
                       registerRef: (node) => {
                         if (node) cardsRef.current[group.id] = node
                         else delete cardsRef.current[group.id]
                       },
-                      changed: group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length,
+                      changed: group.rows.filter((row) => rowShown(row) && String(draft[row.key]) !== String(base[row.key])).length,
                       onToggle: change,
                     })),
                 ),
@@ -1291,11 +1337,12 @@ window.__ModuleLoader__.load({
                 draft,
                 filter,
                 openSignal: jump.id === group.id ? jump.n : 0,
+                advanced: showAdvanced,
                 registerRef: (node) => {
                   if (node) cardsRef.current[group.id] = node
                   else delete cardsRef.current[group.id]
                 },
-                changed: group.rows.filter((row) => String(draft[row.key]) !== String(base[row.key])).length,
+                changed: group.rows.filter((row) => rowShown(row) && String(draft[row.key]) !== String(base[row.key])).length,
                 onToggle: change,
               }))
           : null,
@@ -1521,7 +1568,7 @@ window.__ModuleLoader__.load({
     }
 
     // 纯逻辑给单测用；运行时形态不变（客户端拿不到本地模块，只能这样暴露）
-    const __test = { rowMatches, layoutNodes, projectPoint, flyAngles, groupOrder: () => GROUPS.map((group) => group.id) }
+    const __test = { rowMatches, layoutNodes, projectPoint, flyAngles, groupOrder: () => GROUPS.map((group) => group.id), advancedKeys: () => GROUPS.flatMap((group) => group.rows.filter((row) => row.advanced).map((row) => row.key)), rowKeys: () => GROUPS.flatMap((group) => group.rows.map((row) => row.key)) }
 
     return { name, inject, apply, __test }
   },

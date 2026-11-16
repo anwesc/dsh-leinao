@@ -84,8 +84,13 @@ test('client: 导出 name/inject，并注册设置页与会话 chip 两个 slot'
 })
 
 test('client: 设置菜单按改动频次排，日志放最后', () => {
-  const { groupOrder } = loadClient().__test
-  assert.deepEqual(groupOrder(), ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'mood', 'journal'])
+  const client = loadClient()
+  const { groupOrder, advancedKeys, rowKeys } = client.__test
+  assert.deepEqual(groupOrder(), ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'nudge', 'mood', 'journal'])
+  assert.ok(advancedKeys().includes('memory.strongThreshold'))
+  const keys = rowKeys()
+  assert.ok(!keys.includes('memory.foldMaxPrompts'), '整理提醒上限应该删掉')
+  assert.ok(!keys.includes('prompt.order') && !keys.includes('prompt.userOrder'))
 })
 
 test('client: rowMatches 只匹配标签/键名/说明，忽略大小写', () => {

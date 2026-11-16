@@ -34,7 +34,6 @@ export const MEMORY = {
   weakRecallHours: 6,
   /** 折叠提醒：每多少轮提一次、一次会话最多提几次 */
   foldEveryTurns: 30,
-  foldMaxPrompts: 3,
   /** 单条正文上限 */
   contentMaxChars: 2000,
 }

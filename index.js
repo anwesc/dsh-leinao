@@ -177,7 +177,6 @@ export function apply(ctx, inlineConfig = {}) {
   /** 最近一句用户原话：记忆索引靠它做弱命中 */
   let lastCue = ''
   let reminderTurn = null
-  let reminderCount = 0
   /** 写记忆提醒：待注入的那一条，以及本会话的去重/冷却状态 */
   let pendingNudge = null
   const nudgedKeys = new Set()
@@ -440,18 +439,16 @@ export function apply(ctx, inlineConfig = {}) {
 
   /**
    * 折叠提醒：只提醒，不替模型压——摘要要用当前对话的上下文写，后台拿不到。
-   * 每 foldEveryTurns 轮最多提一次，一次会话最多 foldMaxPrompts 次；模型不接就停。
+   * 每 foldEveryTurns 轮最多提一次；模型不接，下一轮就过去了。
    */
   function foldReminder(state, now) {
     if (!(cfg.memory.foldEveryTurns > 0)) return null
-    if (reminderCount >= cfg.memory.foldMaxPrompts) return null
     const turns = state.stats?.userTurns ?? 0
     if (turns === 0 || turns % cfg.memory.foldEveryTurns !== 0) return null
     if (reminderTurn === turns) return null
     const groups = foldCandidates(state, now, cfg.memory)
     if (!groups.length) return null
     reminderTurn = turns
-    reminderCount += 1
     const group = groups[0]
     const more = group.paths.length > 4 ? ' 等' : ''
     return `记忆整理：标签「${group.tag}」有 ${group.paths.length} 条旧记忆可以压成一条（${group.paths.slice(0, 4).join('、')}${more}），要整理就调 persona_digest。`

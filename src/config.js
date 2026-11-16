@@ -55,7 +55,6 @@ export const DEFAULT_CONFIG = {
     foldMinGroup: 3,
     /** 每多少轮提一次整理建议、一次会话最多提几次 */
     foldEveryTurns: 30,
-    foldMaxPrompts: 3,
     /** 注入命中后多久内不重复记 recall */
     weakRecallHours: 6,
     /** 写记忆的轻提醒：同一类信号一次会话只提一次，提完冷却，最近写过就不提 */

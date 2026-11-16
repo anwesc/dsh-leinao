@@ -117,9 +117,7 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `journal.pullTimeoutMs` | `20000` | git 拉取/推送的超时 |
 | `mood.debounceMs` | `2000` | 心情状态写盘的防抖 |
 | `mood.halfLifeHours` | `6` | 心情回基线的时间尺度 |
-| `prompt.order` | `130` | 注入块在 system prompt 里的位置 |
 | `prompt.maxChars` | `1200` | 注入块长度上限（超了截断） |
-| `prompt.userOrder` | `131` | 用户模型块的位置（紧跟人格块） |
 | `prompt.userMaxChars` | `400` | 用户模型块上限；设 0 等于关掉这一块 |
 | `memory.halfLifeDays` | `21` | 记忆强度半衰期 |
 | `memory.indexMaxLines` | `5` | 每轮注入最多几行记忆摘要 |
@@ -130,7 +128,6 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `memory.foldBelowStrength` | `0.4` | 折叠候选的强度门槛 |
 | `memory.foldMinGroup` | `3` | 同标签至少几条才提示整理 |
 | `memory.foldEveryTurns` | `30` | 每多少轮提一次整理 |
-| `memory.foldMaxPrompts` | `3` | 一次会话最多提几次 |
 | `memory.weakRecallHours` | `6` | 同一页弱召回的冷却 |
 | `memory.nudgeEnabled` | `true` | 用户说到长期偏好/约定时，提一句要不要记 |
 | `memory.nudgeCooldownMinutes` | `30` | 两次提醒之间的冷却 |
@@ -161,13 +158,13 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 
 DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模块加载器直接加载，不打包）：
 
-- 七组：基本 / 日记与同步 / 心情 / 注入 / 记忆索引 / 整理与召回 / 主动开口；顶部一条运行状态（阶段、轮次、记忆条数、数据目录、配置文件），下面「记忆图谱」与「记忆健康」两张卡片。
-- 宽屏是两栏：左边固定目录（七组，带未保存计数），右边只显示当前组；窄屏自动退回单栏手风琴；
+- 九组：基本 / 注入 / 对话检索 / 主动开口 / 记忆索引 / 整理旧记忆 / 写记忆提醒 / 心情 / 日记与同步；顶部一条运行状态（阶段、轮次、记忆条数、数据目录、配置文件），下面「记忆图谱」与「记忆健康」两张卡片。
+- 宽屏是顶部横向目录（带未保存计数），一次只显示当前组；窄屏自动退回单栏手风琴；
 - 「基本」组里的「默认称呼」就是 `userName`：出生时它问到的称呼优先，这里只是兜底；
-- 顶部有搜索框（按标签 / 键名 / 说明过滤，命中项自动展开），窄屏另有一排分组锚点；
+- 顶部有搜索框（按标签 / 键名 / 说明过滤，命中项自动展开）与「高级」开关：阈值、半衰期、节流这类内部参数默认收起，搜索时仍能找到；窄屏另有一排分组锚点；
 - 图谱与健康默认折叠成一行摘要（页数 / 关系数 / 健康分），点开才展开；
 - 只写你改过的键：保存时把 diff 发给宿主，宿主合并进 `$DSH_HOME/leinao.json`，**不会把默认值钉死**。
-- 保存后立刻热重载，多数项下一轮生效；`enabled` / `dataDir` / `deviceId` / `journal.git` / `prompt.order` 标了「重启」，要等下次 DSH 启动。
+- 保存后立刻热重载，多数项下一轮生效；`enabled` / `dataDir` / `deviceId` / `journal.git` / `memory.recallEnabled` / `memory.embedding.*` 标了「重启」，要等下次 DSH 启动。
 - 后端是 `src/settings.js` 注册的同源接口 `GET/PUT /dsh-leinao/config`：白名单、类型/范围校验、原子写（tmp + rename），只接受本机回环来源；数值超范围会被夹到区间里。
 - 设置页里的行与 `src/settings.js` 的 `EDITABLE` 一一对应，新增配置项要两边一起加（`test/settings.test.js` 会盯着白名单）。
 
