@@ -285,6 +285,16 @@ DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模�
 - 接口：`GET /dsh-leinao/user-model` 读，`POST` 传 `{action: 'drop-observation', key}` / `{action: 'clear-observations'}` / `{action: 'forget-page', path}`；
 - 同一份内容还会写进 `view/USER.md`，可以整份拷走。
 
+## 导出 / 换机
+
+`persona_export` 一次做三件事：
+
+1. 把人格、性格、关系、记忆写成 `view/EXPORT.md`（给人看）；
+2. 把用户模型单独写成 `view/USER.md`（可以只拷这一份）；
+3. 打一个整包：`view/exports/leinao-<时间戳>.zip`，里面有 `manifest.json`、`PROFILE.md`、`USER.md`、`state.json` 和整个 `journal/`。
+
+换机器时把 zip 解开、把 `journal/` 放进新的 `dataDir`，启动后插件会重放 journal 自己重建状态——`state.json` 只是缓存，丢了不心疼。zip 是手写的（store / deflate 两种方式，零第三方依赖），只留最近 `keep=10` 份，旧的自动清。
+
 ## 记忆图谱
 
 设置页里那一张「记忆图谱」，把当前可见的记忆页画成一个 3D 球：
@@ -301,7 +311,7 @@ DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模�
 
 设置页「记忆图谱」下面有一张体检卡，五条检查各占权重：
 
-- 索引预算（20）：每轮注入的那 3 行有没有被塞满；
+- 索引预算（20）：每轮注入的那 5 行（默认）有没有被塞满、够格的页有没有被挤掉；
 - 页间关系（20）：孤立页占比 ≤ 40%；
 - 新鲜度（20）：90 天内更新过的页 ≥ 50%；
 - 整理比例（15）：整理页不超过一半；
@@ -355,7 +365,7 @@ DSH 设置里会多一张「类脑」卡片（`client/client.js`，由宿主模�
 | `persona_bond` | 关系台阶：`up` / `down` / `rift` / `repair`（要证据；道歉示好会自动缓和，不用手动调） |
 | `persona_shift` | 性格突变：单轴 ±0.05（要证据、有冷却） |
 | `persona_reset` | 重置心情 / 性格 / 全部（必须 `confirm: true`） |
-| `persona_export` | 把完整状态写到 `view/EXPORT.md` |
+| `persona_export` | 导出：`view/EXPORT.md`、`view/USER.md`，再打一个整包 zip（含 journal，可换机） |
 | `persona_remember` | 记一条：标题、正文（可给路径 / 摘要 / 标签 / 权重 / 关联页 `links` / `subject` 选 self 或 user） |
 | `persona_observe` | 记一条对老大的观察（key / 一句话 / 原话 `evidence` / 置信度），进用户模型，不进人格记忆 |
 | `persona_recall` | 按关键词或路径翻记忆正文（可用 `subject` 只查一边） |

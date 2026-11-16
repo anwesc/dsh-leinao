@@ -23,6 +23,7 @@ import { appendEvent, makeEvent } from './src/journal.js'
 import { applyEvent } from './src/replay.js'
 import { ensureDirs, journalFingerprint, loadState, personaPaths, saveState, writeFileAtomic } from './src/store.js'
 import { renderProfile, writeProfile, writeUserModel } from './src/render.js'
+import { writeExportZip } from './src/bundle.js'
 import { buildInjection, buildUserInjection } from './src/prompt.js'
 import { observationLines, observationStats } from './src/observations.js'
 import { buildUserModel } from './src/userModel.js'
@@ -755,6 +756,7 @@ export function apply(ctx, inlineConfig = {}) {
           return file
         },
         writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
+        writeExportZip: (state) => writeExportZip(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
         userName: () => cfg.userName,
       })
       log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_observe / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')

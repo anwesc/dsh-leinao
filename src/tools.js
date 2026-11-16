@@ -404,7 +404,7 @@ export function registerPersonaTools(ctx, defineTool, rt) {
 
   tools.push(defineTool({
     name: 'persona_export',
-    description: '导出当前人格为 markdown（给人看/备份），用户模型另存一份 USER.md，可单独拿走。返回文件路径。',
+    description: '导出当前人格与记忆：markdown 给人看，另打一个 zip（含 journal、state、PROFILE、USER）方便整个拿走或换机导入。返回文件路径。',
     parameters: {},
     output: TEXT_OUTPUT,
     execute() {
@@ -412,7 +412,17 @@ export function registerPersonaTools(ctx, defineTool, rt) {
       const text = rt.render(state)
       const path = rt.writeExport(text)
       const userPath = rt.writeUserModel?.(state)
-      return Promise.resolve(`已导出到 ${path}。${userPath ? `用户模型另存 ${userPath}。` : ''}\n\n${text}`)
+      let zip = null
+      try {
+        zip = rt.writeExportZip?.(state)
+      } catch (error) {
+        rt.log?.warn?.(`[leinao] 打包失败：${error.message}`)
+      }
+      const lines = [`已导出到 ${path}。`]
+      if (userPath) lines.push(`用户模型另存 ${userPath}。`)
+      if (zip) lines.push(`整包已打包：${zip.path}（${Math.max(1, Math.round(zip.bytes / 1024))} KB，含 journal，可整包换机）。`)
+      else lines.push('打包失败，但 markdown 已导出。')
+      return Promise.resolve(`${lines.join('\n')}\n\n${text}`)
     },
   }))
 
