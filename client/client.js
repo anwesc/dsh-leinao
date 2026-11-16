@@ -128,7 +128,7 @@ window.__ModuleLoader__.load({
           { key: 'proactive.enabled', kind: 'switch', label: '允许主动开口', hint: '关掉后只在你说话时才回应' },
           { key: 'proactive.minMinutes', kind: 'number', label: '最短间隔', hint: '两次主动开口之间至少隔多久', unit: '分钟', min: 0, max: 1440, step: 5 },
           { key: 'proactive.maxMinutes', kind: 'number', label: '最长间隔', hint: '实际间隔在这两个值之间随机', unit: '分钟', min: 0, max: 1440, step: 5 },
-          { key: 'proactive.maxPerSession', kind: 'number', label: '主动开口上限', hint: '一次会话最多主动几次', unit: '次', min: 0, max: 10, step: 1 },
+          { key: 'proactive.maxPerSession', kind: 'number', label: '主动开口上限', hint: '一次会话最多主动几次；0 表示不限', unit: '次', min: 0, max: 50, step: 1 },
           { key: 'proactive.cooldownSeconds', kind: 'number', label: '跨插件冷却', hint: '别的插件刚说过话就让一让', unit: '秒', min: 0, max: 3600, step: 30 },
           { key: 'proactive.minStrength', kind: 'number', label: '最低记忆强度', hint: '太弱的旧事不主动提', unit: '0–1', min: 0, max: 1, step: 0.05 },
           { key: 'proactive.rementionDays', kind: 'number', label: '重提间隔', hint: '同一条记忆隔多少天才能再主动提', unit: '天', min: 0, max: 365, step: 1 },

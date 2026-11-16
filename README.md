@@ -147,7 +147,7 @@ $DSH_HOME/leinao/                 ← 派生 / 本机私有不入库
 | `proactive.enabled` | `true` | 允许它在对话安静下来后主动说一句 |
 | `proactive.minMinutes` | `40` | 两次主动开口的最短间隔（分钟） |
 | `proactive.maxMinutes` | `120` | 两次主动开口的最长间隔（分钟），实际在这区间随机 |
-| `proactive.maxPerSession` | `2` | 一次会话最多主动几次 |
+| `proactive.maxPerSession` | `2` | 一次会话最多主动几次；`0` 表示不限 |
 | `proactive.cooldownSeconds` | `180` | 跨插件共享冷却：别的插件刚说过话就让一让 |
 | `proactive.minStrength` | `0.35` | 低于这个强度的记忆不主动提 |
 | `proactive.rementionDays` | `14` | 同一条记忆隔多少天才能再主动提 |

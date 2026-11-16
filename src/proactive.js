@@ -236,7 +236,8 @@ export class ProactiveNudge {
     const config = { ...PROACTIVE, ...(this.readConfig() ?? {}) }
     if (config.enabled === false) return
     if (this.isEnabled && !this.isEnabled()) return
-    if (this.sent >= Math.max(1, Number(config.maxPerSession ?? PROACTIVE.maxPerSession))) return
+    const maxPerSession = Number(config.maxPerSession ?? PROACTIVE.maxPerSession)
+    if (Number.isFinite(maxPerSession) && maxPerSession > 0 && this.sent >= maxPerSession) return
     if (this.tracker && !this.tracker.shouldInject(this.agent.id)) return
     if (this.agent.status !== 'idle') return
     const inbox = this.agent.inbox

@@ -196,6 +196,17 @@ test('ProactiveNudge：会话被单独关掉时闭嘴', () => {
   nudge.dispose()
 })
 
+test('ProactiveNudge：上限填 0 表示不限', () => {
+  const { agent, sent } = fakeAgent()
+  const { nudge } = nudgeFor(agent, { config: { maxPerSession: 0 } })
+  for (let i = 0; i < 3; i++) {
+    nudge.nextAt = Date.now() - 1
+    nudge.onTurnStopped()
+  }
+  assert.equal(sent.length, 3, '0 不受会话上限约束')
+  nudge.dispose()
+})
+
 test('ProactiveNudge：没有合适记忆时保持沉默', () => {
   const { agent, sent } = fakeAgent()
   const { nudge } = nudgeFor(agent, { getState: () => ({ pages: {} }) })

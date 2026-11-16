@@ -59,7 +59,7 @@ export const EDITABLE = {
   'proactive.enabled': { type: 'boolean' },
   'proactive.minMinutes': { type: 'number', min: 0, max: 1440 },
   'proactive.maxMinutes': { type: 'number', min: 0, max: 1440 },
-  'proactive.maxPerSession': { type: 'number', min: 0, max: 10 },
+  'proactive.maxPerSession': { type: 'number', min: 0, max: 50 },
   'proactive.cooldownSeconds': { type: 'number', min: 0, max: 3600 },
   'proactive.minStrength': { type: 'number', min: 0, max: 1 },
   'proactive.rementionDays': { type: 'number', min: 0, max: 365 },
