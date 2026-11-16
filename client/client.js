@@ -141,8 +141,9 @@ window.__ModuleLoader__.load({
       },
     ]
 
-    // 菜单按「多久会动一次」排，不按开发顺序：日志这种一年改不了两次的排最后。
-    const GROUP_ORDER = ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'nudge', 'mood', 'journal']
+    // 菜单按「多久会动一次」排，不按开发顺序：先总开关，再记忆三块（索引→整理→提醒），
+    // 然后是对话两块（检索→注入），心情与日记一年改不了两次，排最后。
+    const GROUP_ORDER = ['basic', 'proactive', 'index', 'fold', 'nudge', 'recall', 'prompt', 'mood', 'journal']
     GROUPS.sort((a, b) => GROUP_ORDER.indexOf(a.id) - GROUP_ORDER.indexOf(b.id))
 
     const ROW_INDEX = new Map(GROUPS.flatMap((group) => group.rows.map((row) => [row.key, row])))

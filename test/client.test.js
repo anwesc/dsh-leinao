@@ -86,7 +86,7 @@ test('client: 导出 name/inject，并注册设置页与会话 chip 两个 slot'
 test('client: 设置菜单按改动频次排，日志放最后', () => {
   const client = loadClient()
   const { groupOrder, advancedKeys, rowKeys } = client.__test
-  assert.deepEqual(groupOrder(), ['basic', 'prompt', 'recall', 'proactive', 'index', 'fold', 'nudge', 'mood', 'journal'])
+  assert.deepEqual(groupOrder(), ['basic', 'proactive', 'index', 'fold', 'nudge', 'recall', 'prompt', 'mood', 'journal'])
   assert.ok(advancedKeys().includes('memory.strongThreshold'))
   const keys = rowKeys()
   assert.ok(!keys.includes('memory.foldMaxPrompts'), '整理提醒上限应该删掉')
