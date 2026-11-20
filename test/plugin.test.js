@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import apply, { __setDefineTool } from '../index.js'
+import apply from '../index.js'
 import { scanEvents } from '../src/journal.js'
 import { fold } from '../src/replay.js'
 
@@ -59,7 +59,6 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 function setup(t, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'persona-plugin-'))
   const ctx = fakeCtx()
-  __setDefineTool((definition) => definition)
   apply(ctx, {
     dataDir: dir,
     dshHome: join(dir, '.dsh'),
@@ -371,7 +370,7 @@ test('plugin: seed 只有一次，reset 要 confirm', async (t) => {
   assert.match(again, /已经出生过了/)
 
   const reset = ctx.registered.find((tool) => tool.name === 'persona_reset')
-  assert.match(await reset.execute({ scope: 'all' }), /没有执行/)
+  assert.match(await reset.execute({ scope: 'all', confirm: false }), /没有执行/)
   assert.match(await reset.execute({ scope: 'all', confirm: true }), /已重置/)
   assert.match(ctx.prompt.text(), /persona_seed/)
 })
@@ -384,7 +383,8 @@ test('plugin: 增量应用与全量重放结果一致（写事件不用整份重
   await tool('persona_remember').execute({ title: '约定', content: '周六一起打游戏', path: 'events/plan', tags: '约定' })
   await tool('persona_remember').execute({ subject: 'user', title: '作息', content: '常熬夜', path: 'people/late' })
   await tool('persona_observe').execute({ key: '作息', value: '常熬夜写代码', evidence: '又两点睡' })
-  await tool('persona_bond').execute({ action: 'up', why: '配合得好' })
+  ctx.handlers.get('session/event')({}, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '这把我配合得很好' }] } })
+  await tool('persona_bond').execute({ action: 'up', why: '配合得好', evidence: '配合得很好' })
   await wait(30)
 
   const { events } = scanEvents(dir)

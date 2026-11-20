@@ -30,6 +30,7 @@ import { buildUserModel } from './src/userModel.js'
 import { userCall } from './src/call.js'
 import { appraise } from './src/appraisal.js'
 import { registerPersonaTools } from './src/tools.js'
+import { defineTool as localDefineTool } from './src/define-tool.js'
 import { detectMend } from './src/bond.js'
 import { foldCandidates, memoryIndex, memoryStats } from './src/memory.js'
 import { AUTO, autoDraft, detectMemorySignal, hasSensitive, nudgeLine, shouldNudge } from './src/remind.js'
@@ -54,6 +55,17 @@ export const inject = ['tools', 'systemPrompt', 'agents']
 let defineToolOverride = null
 export function __setDefineTool(fn) {
   defineToolOverride = fn
+}
+
+/**
+ * 宿主的 defineTool：能用就用（schema 编译与参数校验更完整），
+ * 解析不到就用本地等价实现。**不能**因为解析失败就跳过工具注册。
+ */
+let hostDefineTool = null
+try {
+  ;({ defineTool: hostDefineTool } = await import('@deepseek-ai/dsh-tools'))
+} catch {
+  hostDefineTool = null
 }
 
 /** cordis 的 ctx.logger 是函数（`ctx.logger('name')` 返回 logger），测试里也可能直接给对象。两种都接。 */
@@ -731,39 +743,31 @@ export function apply(ctx, inlineConfig = {}) {
   })
 
   // ── 工具 ─────────────────────────────────────────────────────────────
-  void (async () => {
-    let defineTool = defineToolOverride
-    if (!defineTool) {
-      try {
-        ;({ defineTool } = await import('@deepseek-ai/dsh-tools'))
-      } catch {
-        log.warn?.('[leinao] 没有 @deepseek-ai/dsh-tools，工具注册跳过（注入仍然生效）')
-        return
-      }
-    }
-    try {
-      registerPersonaTools(ctx, defineTool, {
-        dataDir,
-        deviceId,
-        refresh,
-        record,
-        verifyEvidence: evidence.verify,
-        getConfig: () => cfg,
-        render: (state) => renderProfile(state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
-        writeExport: (text) => {
-          const file = join(paths.view, 'EXPORT.md')
-          writeFileAtomic(file, text)
-          return file
-        },
-        writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
-        writeExportZip: (state) => writeExportZip(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
-        userName: () => cfg.userName,
-      })
-      log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_observe / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')
-    } catch (error) {
-      log.warn?.(`[leinao] 工具注册失败：${error.message}`)
-    }
-  })()
+  // 工具注册必须同步：宿主 defineTool 解析不到时退回本地实现，
+  // 绝不能让工具静默消失（注入还在、模型却写不了记忆）。
+  const toolFactory = defineToolOverride ?? hostDefineTool ?? localDefineTool
+  try {
+    registerPersonaTools(ctx, toolFactory, {
+      dataDir,
+      deviceId,
+      refresh,
+      record,
+      verifyEvidence: evidence.verify,
+      getConfig: () => cfg,
+      render: (state) => renderProfile(state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
+      writeExport: (text) => {
+        const file = join(paths.view, 'EXPORT.md')
+        writeFileAtomic(file, text)
+        return file
+      },
+      writeUserModel: (state) => writeUserModel(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
+      writeExportZip: (state) => writeExportZip(dataDir, state, Date.now(), { mood: cfg.mood, userName: cfg.userName }),
+      userName: () => cfg.userName,
+    })
+    log.info?.('[leinao] 工具已注册：persona_state / persona_seed / persona_pin / persona_bond / persona_shift / persona_remember / persona_observe / persona_recall / persona_digest / persona_forget / persona_reset / persona_export')
+  } catch (error) {
+    log.warn?.('[leinao] 工具注册失败：' + error.message)
+  }
 
   // 启动时把已有 journal 落成 state + PROFILE（首次运行会生成 view/PROFILE.md）
   persistNow()

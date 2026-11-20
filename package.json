@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-leinao",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": { "type": "git", "url": "git+https://github.com/anwesc/dsh-leinao.git" },
   "homepage": "https://github.com/anwesc/dsh-leinao#readme",
   "bugs": { "url": "https://github.com/anwesc/dsh-leinao/issues" },
