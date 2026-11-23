@@ -56,9 +56,10 @@ function fakeCtx() {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function setup(t, extra = {}) {
+function setup(t, extra = {}, prepare) {
   const dir = mkdtempSync(join(tmpdir(), 'persona-plugin-'))
   const ctx = fakeCtx()
+  prepare?.(ctx)
   apply(ctx, {
     dataDir: dir,
     dshHome: join(dir, '.dsh'),
@@ -440,3 +441,81 @@ test('plugin: 提到以前说过的事时，召回相关片段进注入', async 
   assert.match(text, /三栏布局/)
 })
 
+
+test('plugin: 一轮里动过手，回合结束自动留一条工作记录', async (t) => {
+  const agentHandlers = new Map()
+  const agent = {
+    id: 'agent-1',
+    status: 'idle',
+    session: { header: { cwd: 'D:/01_Code/github/dsh-leinao' } },
+    inbox: { nextStep: [] },
+    followup() {},
+    ctx: {
+      on(name, handler) {
+        if (!agentHandlers.has(name)) agentHandlers.set(name, [])
+        agentHandlers.get(name).push(handler)
+        return () => {
+          const list = agentHandlers.get(name) ?? []
+          const index = list.indexOf(handler)
+          if (index >= 0) list.splice(index, 1)
+        }
+      },
+      effect(fn) {
+        agentDisposers.push(fn())
+      },
+    },
+  }
+  const agentDisposers = []
+  t.after(() => {
+    for (const dispose of agentDisposers) dispose?.()
+  })
+
+  const { dir, ctx } = setup(t, { worklog: { enabled: true, minActions: 1 } }, (fake) => {
+    fake.agents = { roots: () => [agent], get: (id) => (id === agent.id ? agent : undefined) }
+  })
+  ctx.handlers.get('agent/created')({ agent })
+
+  const call = (name, args) => ctx.handlers.get('tools/result')({ name, arguments: args, agent: { id: agent.id } })
+  call('read', { file_path: 'x.md' }) // 只读不算
+  call('write', { file_path: 'D:/x/src/a.js' })
+  call('ops_bash', { command: 'npm test' })
+  call('persona_remember', { title: 'x' }) // 记忆类工具不算
+
+  const stop = () => {
+    for (const handler of agentHandlers.get('agent/turn-stopping') ?? []) handler()
+  }
+  stop()
+  await wait(40)
+
+  const pagesOf = (dirPath) => scanEvents(dirPath).events.filter((event) => event.kind === 'page')
+  let pages = pagesOf(dir)
+  assert.equal(pages.length, 1)
+  assert.match(pages[0].path, /^worklog\/\d{4}-\d{2}-\d{2}\/dsh-leinao$/)
+  assert.match(pages[0].content, /改 a\.js/)
+  assert.match(pages[0].content, /跑 npm test/)
+  assert.ok(!pages[0].content.includes('x.md'))
+  assert.deepEqual(pages[0].tags, ['工作记录'])
+  assert.equal(pages[0].salience, 3)
+
+  // 同一轮再动一次手：追加到同一条，而不是新开一条
+  call('edit', { file_path: 'D:/x/src/b.js' })
+  stop()
+  await wait(40)
+  pages = pagesOf(dir)
+  assert.equal(pages.length, 2)
+  assert.equal(pages[1].path, pages[0].path)
+  assert.match(pages[1].content, /改 a\.js/)
+  assert.match(pages[1].content, /改 b\.js/)
+
+  // 删掉之后，再干活不会把它复活
+  const forget = ctx.registered.find((tool) => tool.name === 'persona_forget')
+  await forget.execute({ path: pages[0].path, why: '不想要工作记录' })
+  call('write', { file_path: 'D:/x/src/c.js' })
+  stop()
+  await wait(40)
+  assert.equal(pagesOf(dir).length, 2) // 删掉的页不再长长
+
+  const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
+  const page = state.state.pages[pages[0].path]
+  assert.ok(page.forgottenAt, '删掉的页不该被新动作复活')
+})

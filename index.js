@@ -39,6 +39,7 @@ import { createEmbedder } from './src/embed.js'
 import { loadVectors, searchVectors, syncVectors } from './src/vectors.js'
 import { buildGraph } from './src/graph.js'
 import { buildHealth } from './src/health.js'
+import { WORKLOG, buildWorklogSegment, createWorklogBuffer, mergeWorklog, worklogPath } from './src/worklog.js'
 import { ActivityTracker, ProactiveNudge } from './src/proactive.js'
 import { SessionGate } from './src/sessions.js'
 import { installGraphApi, installSessionApi, installSettingsApi, installUserModelApi } from './src/settings.js'
@@ -197,6 +198,8 @@ export function apply(ctx, inlineConfig = {}) {
   let nudgeCount = 0
   /** 自动草稿：同类信号的出现记录，以及本会话已经自动写过的类 */
   const signalSeen = new Map()
+  /** 工作记录：这一轮动过手的动作，回合结束时落成 page */
+  const worklogBuffer = createWorklogBuffer(cfg.worklog)
   const autoWritten = new Set()
 
   /**
@@ -311,6 +314,37 @@ export function apply(ctx, inlineConfig = {}) {
     const docs = (base.scan?.events ?? []).filter((event) => event.kind === 'message')
     messageIndexCache = { fp: currentFp, index: buildIndex(docs) }
     return messageIndexCache.index
+  }
+
+  /**
+   * 回合结束：把这一轮动过手的动作落成当天的工作记录。
+   * 只记结构化事实（改了什么文件、跑了什么命令），不做语义推断。
+   */
+  function flushWorklog(agent) {
+    if (!agent || cfg.worklog?.enabled === false) return
+    const actions = worklogBuffer.take(agent.id)
+    const min = Math.max(1, Number(cfg.worklog?.minActions ?? WORKLOG.minActions))
+    if (actions.length < min) return
+    const now = Date.now()
+    const path = worklogPath(sessionCwd(agent), now)
+    const prev = refresh().state.pages?.[path]
+    if (prev?.forgottenAt) return // 记过又被删掉，就别再复活
+    const segment = buildWorklogSegment(actions, now, cfg.worklog ?? WORKLOG)
+    const content = mergeWorklog(prev?.content, segment, cfg.worklog ?? WORKLOG)
+    const [, day = "", name = ""] = path.split("/")
+    try {
+      record({
+        kind: 'page',
+        path,
+        title: `${day.slice(5)} · ${name}`,
+        content,
+        gist: `${actions.length} 步：${actions.slice(0, 2).join("；")}`,
+        tags: ['工作记录'],
+        salience: 3,
+      })
+    } catch (error) {
+      log.warn?.(`[leinao] 写工作记录失败：${error.message}`)
+    }
   }
 
   function recordMessage(role, text, session) {
@@ -561,6 +595,22 @@ export function apply(ctx, inlineConfig = {}) {
             nudge.start()
             return () => nudge.dispose()
           })
+          agent.ctx?.effect?.(() => {
+            const stop = agent.ctx?.on?.('agent/turn-stopping', () => {
+              try {
+                flushWorklog(agent)
+              } catch (error) {
+                log.warn?.(`[leinao] 回合结束时写工作记录失败：${error.message}`)
+              }
+            })
+            return () => {
+              try {
+                stop?.()
+              } catch {
+                // 已经断了就算了
+              }
+            }
+          })
         } catch (error) {
           log.warn?.(`[leinao] 挂主动开口失败：${error.message}`)
         }
@@ -741,6 +791,34 @@ export function apply(ctx, inlineConfig = {}) {
       log.warn?.(`[leinao] 处理对话事件失败：${error.message}`)
     }
   })
+
+  // ── 工作记录 ─────────────────────────────────────────────────────────
+  // 采集真实的工具调用，回合结束落成 `worklog/<日期>/<仓库>` 一条 page。
+  ctx.effect?.(() => {
+    if (typeof ctx.on !== 'function') return () => {}
+    let off = () => {}
+    try {
+      off = ctx.on('tools/result', (exec) => {
+        try {
+          if (cfg.worklog?.enabled === false) return
+          const agentId = exec?.agent?.id
+          if (!agentId) return
+          worklogBuffer.record(agentId, exec.name, exec.arguments)
+        } catch (error) {
+          log.warn?.(`[leinao] 记录工具调用失败：${error.message}`)
+        }
+      })
+    } catch (error) {
+      log.warn?.(`[leinao] 订阅 tools/result 失败：${error.message}`)
+    }
+    return () => {
+      try {
+        off?.()
+      } catch {
+        // 已经断了就算了
+      }
+    }
+  }, 'leinao.worklog()')
 
   // ── 工具 ─────────────────────────────────────────────────────────────
   // 工具注册必须同步：宿主 defineTool 解析不到时退回本地实现，

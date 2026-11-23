@@ -95,6 +95,12 @@ export const DEFAULT_CONFIG = {
     /** 会话级开关的记忆时长（天）：过期自动清掉，0 表示永不过期 */
     sessionTtlDays: 7,
   },
+  /** 工作记录：一轮里真正动过手（改文件、跑命令）才落一条，不推断语义 */
+  worklog: {
+    enabled: true,
+    /** 至少几步才记；少于这个数当作查询/闲聊，不占记忆 */
+    minActions: 2,
+  },
   /** 首次引导的默认值；正式使用应通过 persona_seed 写入 seed 事件 */
   seed: { name: '', gender: '', userCall: '' },
   /** 打开后把主要动作写进日志（排查用） */

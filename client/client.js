@@ -55,6 +55,8 @@ window.__ModuleLoader__.load({
           { key: 'journal.commitDebounceMs', kind: 'number', label: '提交防抖', hint: '安静这么久再提交一次', unit: '毫秒', min: 0, max: 120000, step: 500, advanced: true },
           { key: 'journal.pushDebounceMs', kind: 'number', label: '推送防抖', hint: '连着聊几轮只推一次', unit: '毫秒', min: 0, max: 3600000, step: 5000, advanced: true },
           { key: 'journal.recordMessages', kind: 'switch', label: '记录对话内容', hint: '每条消息进 journal，供检索召回；敏感信息会过滤。关掉只留情绪和记忆事件', restart: true },
+          { key: 'worklog.enabled', kind: 'switch', label: '工作记录', hint: '把一轮里改文件、跑命令这类动作自动汇总成当天的一条记忆（不记查询）', restart: true },
+          { key: 'worklog.minActions', kind: 'number', label: '至少几步才记', hint: '少于这个数的当作查询或闲聊，不占记忆', unit: '步', min: 1, max: 12, step: 1 },
           { key: 'journal.pullTimeoutMs', kind: 'number', label: '同步超时', hint: 'git 拉取最多等多久', unit: '毫秒', min: 1000, max: 300000, step: 1000, advanced: true },
         ],
       },

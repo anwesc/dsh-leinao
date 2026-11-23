@@ -61,6 +61,8 @@ export const EDITABLE = {
   'proactive.minStrength': { type: 'number', min: 0, max: 1 },
   'proactive.rementionDays': { type: 'number', min: 0, max: 365 },
   'proactive.sessionTtlDays': { type: 'number', min: 0, max: 365 },
+  'worklog.enabled': { type: 'boolean', restart: true },
+  'worklog.minActions': { type: 'number', min: 1, max: 12 },
 }
 
 const CONFIG_PATH = '/dsh-leinao/config'
