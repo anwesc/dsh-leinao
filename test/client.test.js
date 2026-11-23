@@ -46,7 +46,7 @@ function loadClient({ react } = {}) {
 
 test('client: 导出 name/inject，并注册设置页与会话 chip 两个 slot', () => {
   const client = loadClient()
-  assert.equal(client.name, 'dsh-plugin-leinao')
+  assert.equal(client.name, 'dsh-leinao')
   assert.deepEqual(client.inject, ['slots', 'locale'])
 
   const slots = []
@@ -73,13 +73,13 @@ test('client: 导出 name/inject，并注册设置页与会话 chip 两个 slot'
 
   const settings = slots.find((slot) => slot.name === 'settings.section')
   assert.ok(settings, '必须注册设置页卡片')
-  assert.equal(settings.id, 'dsh-plugin-leinao')
+  assert.equal(settings.id, 'dsh-leinao')
   assert.equal(settings.order, 70)
   assert.equal(typeof settings.component, 'function')
 
   const chip = slots.find((slot) => slot.name === 'conversation.input.left')
   assert.ok(chip, '必须注册会话内开关')
-  assert.equal(chip.id, 'dsh-plugin-leinao-session-toggle')
+  assert.equal(chip.id, 'dsh-leinao-session-toggle')
   assert.equal(chip.order, 100)
 })
 

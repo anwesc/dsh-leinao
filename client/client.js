@@ -16,12 +16,12 @@
  * - 底部粘一条保存栏，随时能看到「有未保存的改动」。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-plugin-leinao',
+  id: 'dsh-leinao',
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
 
-    const NS = 'dsh-plugin-leinao'
+    const NS = 'dsh-leinao'
     const API = '/dsh-leinao/config'
     const SESSION_API = '/dsh-leinao/session'
 
@@ -1533,7 +1533,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    const name = 'dsh-plugin-leinao'
+    const name = 'dsh-leinao'
     const inject = ['slots', 'locale']
 
     function apply(ctx) {
